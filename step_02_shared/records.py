@@ -24,9 +24,9 @@ def log_sensitive(phone=None, password=None, extra_msg=""):
     """Log with encoded phone/password to bypass platform masking."""
     parts = []
     if phone:
-        parts.append(f"PH:{_enc(phone)}")
+        parts.append(f"手机号:{_enc(phone)}")
     if password:
-        parts.append(f"PW:{_enc(password)}")
+        parts.append(f"密码:{_enc(password)}")
     if extra_msg:
         parts.append(extra_msg)
     log("  " + " | ".join(parts))
@@ -40,6 +40,6 @@ def save_record(record):
         safe["phone_b64"] = _enc(safe.pop("phone"))
     if "password" in safe:
         safe["password_b64"] = _enc(safe.pop("password"))
-    with open(ACCOUNTS_LOG, "a") as f:
+    with open(ACCOUNTS_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(safe) + "\n")
         f.flush()

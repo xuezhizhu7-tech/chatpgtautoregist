@@ -51,10 +51,10 @@ def buy_number(country_cfg=None):
                 price_data.get(str(hero_id), {}).get(SERVICE, {}).get("cost", 999)
             )
             if country_price > MAX_PRICE:
-                log(f"  [!] {name} price ${country_price} > ${MAX_PRICE}, skipping")
+                log(f"  [!] {name} 价格 ${country_price} 超过 ${MAX_PRICE}，跳过")
                 continue
         except Exception:
-            log(f"  [!] Failed to check price for {name}, skipping")
+            log(f"  [!] 检查 {name} 价格失败，跳过")
             continue
 
         r = subprocess.run(["curl", "-sS", "--max-time", "15",
@@ -65,20 +65,20 @@ def buy_number(country_cfg=None):
             act_id = parts[1]
             phone = parts[2]
             updated_cfg = {"id": hero_id, "dial": dial, "iso": iso, "name": name, "bought_at": time.time()}
-            log(f"  Number from {name} (${country_price:.3f})")
+            log(f"  已从 {name} 获取号码（${country_price:.3f}）")
             return act_id, phone, updated_cfg
 
-    log(f"  No numbers available from any country")
+    log(f"  所有国家当前都没有可用号码")
     return None, None, country_cfg
 
 
 def cancel_number(act_id, bought_at=None):
-    log(f"  [SMS] Cancelling number act_id={act_id}...")
+    log(f"  [短信] 正在取消号码 act_id={act_id}...")
     r = subprocess.run(["curl", "-sS", "--max-time", "10",
         f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
         capture_output=True, text=True)
     resp = r.stdout.strip()
-    log(f"  [SMS] Cancel response: {resp or 'empty response'}")
+    log(f"  [短信] 取消响应: {resp or '空响应'}")
 
     if "EARLY_CANCEL_DENIED" in resp:
         min_activation = 120
@@ -91,28 +91,28 @@ def cancel_number(act_id, bought_at=None):
             wait = max(0, min_activation - int(time.time() - bought_at) + 2)
         else:
             wait = min_activation + 2
-        log(f"  [SMS] Early cancel denied; waiting {wait}s before retry...")
+        log(f"  [短信] 暂不允许提前取消；等待 {wait} 秒后重试...")
         remaining = wait
         while remaining > 0:
             if remaining <= 5:
                 sleep_for = 1
             else:
                 sleep_for = min(10, remaining - 5)
-            log(f"  [SMS] Cancel retry countdown: {remaining}s remaining")
+            log(f"  [短信] 取消重试倒计时: 剩余 {remaining} 秒")
             time.sleep(sleep_for)
             remaining -= sleep_for
         r = subprocess.run(["curl", "-sS", "--max-time", "10",
             f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
             capture_output=True, text=True)
-        log(f"  [SMS] Cancel retry response: {r.stdout.strip() or 'empty response'}")
+        log(f"  [短信] 取消重试响应: {r.stdout.strip() or '空响应'}")
 
 
 def finish_number(act_id):
-    log(f"  [SMS] Finishing number act_id={act_id}...")
+    log(f"  [短信] 正在标记号码完成 act_id={act_id}...")
     r = subprocess.run(["curl", "-sS", "--max-time", "10",
         f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=6"],
         capture_output=True, text=True)
-    log(f"  [SMS] Finish response: {r.stdout.strip() or 'empty response'}")
+    log(f"  [短信] 完成响应: {r.stdout.strip() or '空响应'}")
 
 
 def get_sms(act_id, timeout=150, bought_at=None):
@@ -127,13 +127,13 @@ def get_sms(act_id, timeout=150, bought_at=None):
         status = r.stdout.strip()
         remaining = max(0, int(deadline - time.time()))
         if "STATUS_OK" in r.stdout:
-            log(f"  [SMS] attempt {attempt}: received code")
+            log(f"  [短信] 第 {attempt} 次查询：已收到验证码")
             return r.stdout.split(":")[1]
         if "STATUS_CANCEL" in r.stdout:
-            log(f"  [SMS] attempt {attempt}: cancelled by provider")
+            log(f"  [短信] 第 {attempt} 次查询：服务商已取消")
             return None
-        log(f"  [SMS] attempt {attempt}: {status or 'empty response'}; {remaining}s remaining")
+        log(f"  [短信] 第 {attempt} 次查询：{status or '空响应'}；剩余 {remaining} 秒")
         time.sleep(10)
-    log(f"  [SMS] Timeout after {timeout}s, cancelling number {act_id}")
+    log(f"  [短信] 等待 {timeout} 秒超时，正在取消号码 {act_id}")
     cancel_number(act_id, bought_at)
     return None

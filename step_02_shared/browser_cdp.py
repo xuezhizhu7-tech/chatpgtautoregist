@@ -173,8 +173,8 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     r = subprocess.run(["bash", "/tmp/launch_chrome_fp.sh"],
         capture_output=True, text=True, timeout=30)
     ok = "CDP_SUCCESS" in r.stdout
-    proxy_mode = "direct"
-    log(f"  Chrome restarted: {w}x{h}, UA: ...{ua[-30:]}, mode={proxy_mode}, CDP: {'OK' if ok else 'FAIL'}")
+    proxy_mode = "直连"
+    log(f"  Chrome 已重启：{w}x{h}，UA: ...{ua[-30:]}，模式={proxy_mode}，CDP: {'正常' if ok else '失败'}")
     if not ok:
-        log(f"  stdout: {r.stdout[:200]}")
+        log(f"  标准输出: {r.stdout[:200]}")
     return ok

@@ -29,13 +29,13 @@ def log(msg):
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
+        with open(STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
     return {"total_success": 0, "total_failed": 0, "total_wasted_numbers": 0}
 
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f)
 
 
@@ -75,8 +75,8 @@ def run_batch(batch_size, country_info=None):
         cmd += ["--country", str(country_info["id"]), "--dial", country_info["dial"], "--iso", country_info["iso"]]
     cmd += ["--no-proxy"]
 
-    country_name = country_info["name"] if country_info else "default"
-    log(f"  Running batch of {batch_size} ({country_name})...")
+    country_name = country_info["name"] if country_info else "默认国家"
+    log(f"  正在运行批次：{batch_size} 个（{country_name}）...")
     r = subprocess.run(
         cmd,
         capture_output=True, text=True, env=env, timeout=1800
@@ -86,7 +86,7 @@ def run_batch(batch_size, country_info=None):
     stderr = r.stderr
     returncode = r.returncode
 
-    with open(logfile, "w") as f:
+    with open(logfile, "w", encoding="utf-8") as f:
         f.write(output)
         if stderr:
             f.write("\n--- STDERR ---\n")
@@ -111,7 +111,7 @@ def run_batch(batch_size, country_info=None):
             break
 
     if not summary_parsed:
-        # Fallback: parse human-readable FINAL line
+        # 兼容旧版英文最终汇总行
         for line in output.split("\n"):
             if "FINAL:" in line:
                 import re
@@ -122,10 +122,10 @@ def run_batch(batch_size, country_info=None):
 
     # If child crashed, log the details
     if returncode != 0:
-        log(f"  ⚠ Child exited with code {returncode}")
+        log(f"  ⚠ 子进程退出码: {returncode}")
         if stderr:
             for line in stderr.strip().split("\n")[-5:]:
-                log(f"    stderr: {line}")
+                log(f"    标准错误: {line}")
 
     # Check for wasted numbers
     sms_received = output.count("[6] SMS code:")
@@ -133,18 +133,18 @@ def run_batch(batch_size, country_info=None):
     wasted = sms_received - registrations_ok
 
     log(f"  Result: {success} registered, {failed} failed, {wasted} wasted numbers")
-    log(f"  Log: {logfile}")
+    log(f"  日志文件: {logfile}")
 
     return success, failed, wasted
 
 
 def main():
     log("=" * 50)
-    log("AUTO BATCH REGISTER - SMS Monitor")
+    log("自动批量注册 - 短信库存监控")
     log("=" * 50)
 
     state = load_state()
-    log(f"State: total_success={state['total_success']}, total_failed={state['total_failed']}")
+    log(f"状态: 总成功={state['total_success']}，总失败={state['total_failed']}")
 
     consecutive_no_stock = 0
 
@@ -156,12 +156,12 @@ def main():
             consecutive_no_stock += 1
             # Adaptive wait: 5min normally, 15min after many checks
             wait = 300 if consecutive_no_stock < 12 else 900
-            log(f"No stock (check #{consecutive_no_stock}). Next check in {wait//60}min...")
+            log(f"无库存（第 {consecutive_no_stock} 次检查）。{wait//60} 分钟后再次检查...")
             time.sleep(wait)
             continue
 
         consecutive_no_stock = 0
-        log(f"✓ Stock reported: {active_country['name']} count={count}, physical={physical}, price=${price}")
+        log(f"✓ 发现库存: {active_country['name']} 数量={count}，实体数量={physical}，价格=${price}")
 
         # Verify by actually trying to buy a number
         try:
@@ -170,7 +170,7 @@ def main():
                 capture_output=True, text=True, timeout=15)
             resp = r.stdout.strip()
             if "NO_NUMBERS" in resp:
-                log(f"  But getNumber returned NO_NUMBERS. Fake stock, waiting...")
+                log(f"  但 getNumber 返回 NO_NUMBERS，疑似假库存，继续等待...")
                 time.sleep(300)
                 continue
             elif "ACCESS_NUMBER" in resp:
@@ -180,27 +180,27 @@ def main():
                 subprocess.run(["curl", "-sS", "--max-time", "10",
                     f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
                     capture_output=True, text=True, timeout=15)
-                log(f"  ✓ Verified: real stock available (test number cancelled)")
+                log(f"  ✓ 已验证真实库存可用（测试号码已取消）")
             else:
-                log(f"  Unexpected response: {resp[:80]}, waiting...")
+                log(f"  收到意外响应: {resp[:80]}，继续等待...")
                 time.sleep(300)
                 continue
         except Exception as e:
-            log(f"  Verify error: {e}, waiting...")
+            log(f"  验证库存出错: {e}，继续等待...")
             time.sleep(300)
             continue
 
-        log("  Proxy: DIRECT (local network)")
+        log("  代理: 直连（本地网络）")
 
         # Run batch
         batch = min(BATCH_SIZE, count)
         try:
             success, failed, wasted = run_batch(batch, active_country)
         except subprocess.TimeoutExpired:
-            log("  ⚠ Batch timed out (30min). Continuing...")
+            log("  ⚠ 批次超时（30 分钟）。继续运行...")
             success, failed, wasted = 0, batch, 0
         except Exception as e:
-            log(f"  ⚠ Batch error: {e}. Continuing...")
+            log(f"  ⚠ 批次出错: {e}。继续运行...")
             success, failed, wasted = 0, batch, 0
 
         # Update state
@@ -214,16 +214,16 @@ def main():
 
         # If wasted numbers detected, STOP and alert
         if wasted > 0:
-            log("⚠️  WASTED NUMBERS DETECTED! Stopping for review.")
+            log("⚠️  检测到号码浪费！停止运行以便检查。")
             break
 
         # If all failed (likely stock ran out mid-batch), wait before retry
         if success == 0 and failed > 0:
-            log("  All failed, waiting 5min before retry...")
+            log("  本批次全部失败，等待 5 分钟后重试...")
             time.sleep(300)
         else:
             # Brief pause between batches
-            log("  Waiting 30s before next batch...")
+            log("  等待 30 秒后运行下一批次...")
             time.sleep(30)
 
 

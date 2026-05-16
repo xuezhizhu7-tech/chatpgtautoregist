@@ -49,14 +49,14 @@ def load_pending_accounts(jsonl_path, max_count=0):
     Returns list of dicts with phone, password (decoded from base64)."""
     accounts = []
     if not os.path.exists(jsonl_path):
-        log(f"  Accounts file not found: {jsonl_path}")
+        log(f"  账号文件不存在: {jsonl_path}")
         return accounts
 
     # Track which phones have been successfully imported
     imported_phones = set()
     registered_phones = []
 
-    with open(jsonl_path) as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -97,7 +97,7 @@ def load_pending_accounts(jsonl_path, max_count=0):
 async def oauth_import(phone, password, account_email, token, email_jwt=None):
     """OAuth login with phone+password -> add-email -> Sub2API import"""
     oauth_url, session_id, state = generate_auth_url(token)
-    log(f"  OAuth session: {session_id[:16]}")
+    log(f"  OAuth 会话: {session_id[:16]}")
 
     r = subprocess.run(["curl", "-sS", "--max-time", "3", f"http://127.0.0.1:{CDP_PORT}/json/list"],
                       capture_output=True, text=True)
@@ -116,7 +116,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         await cdp.inject_fingerprint()
 
         url = await cdp.url()
-        log(f"  [O1] OAuth landed: {url}")
+        log(f"  [O1] 已打开 OAuth 页面: {url}")
 
         # Click "Continue with phone"
         await cdp.ev("""(function(){
@@ -146,11 +146,11 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         await cdp.click_submit()
         await asyncio.sleep(6)
         url = await cdp.url()
-        log(f"  [O2] After phone: {url}")
+        log(f"  [O2] 提交手机号后: {url}")
 
         # Should be on password page
         if "password" not in (url or ""):
-            log(f"  ✗ Not on password page: {url}")
+            log(f"  ✗ 未进入密码页: {url}")
             return "no_password_page"
 
         # Enter password
@@ -169,7 +169,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.3)
         pwd_len = await cdp.ev('document.querySelector(\'input[type="password"]\')?.value?.length || 0')
-        log(f"  [O3a] Password field length: {pwd_len}")
+        log(f"  [O3a] 密码框长度: {pwd_len}")
         await asyncio.sleep(0.5)
         await cdp.click_submit()
         await asyncio.sleep(3)
@@ -181,7 +181,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             await asyncio.sleep(4)
 
         url = await cdp.url()
-        log(f"  [O3] After password submit: {url}")
+        log(f"  [O3] 提交密码后: {url}")
 
         # If still on password page after first attempt, diagnose and retry
         if "password" in (url or ""):
@@ -195,53 +195,53 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 });
                 return JSON.stringify({inputs:inputs, errors:errors, buttons:buttons});
             })()""")
-            log(f"  [O3d] Still on password page — diag: {diag}")
+            log(f"  [O3d] 仍停留在密码页，诊断信息: {diag}")
 
             # Retry: re-focus password field, re-type, and click submit
-            log("  [O3d] Retrying password submit...")
+            log("  [O3d] 正在重新提交密码...")
             await cdp.ev('var el=document.querySelector(\'input[type="password"]\'); if(el){el.focus(); el.click();}')
             await asyncio.sleep(0.3)
             await cdp.click_submit()
             await asyncio.sleep(4)
 
             url = await cdp.url()
-            log(f"  [O3d] After retry: {url}")
+            log(f"  [O3d] 重试后: {url}")
 
             # Still stuck? Log page text snippet for more context
             if "password" in (url or ""):
                 text = await cdp.text(300)
-                log(f"  [O3d] Page text: {text}")
+                log(f"  [O3d] 页面文本: {text}")
 
         # Handle add-email
         if "add-email" in (url or ""):
-            log("  [O4] Add-email page")
+            log("  [O4] 进入添加邮箱页")
             otp_ts = time.time() - 10
             await cdp.focus_and_type('input[type="email"]', account_email)
             await asyncio.sleep(0.3)
             await cdp.click_submit()
             await asyncio.sleep(6)
             url = await cdp.url()
-            log(f"  [O4b] After email submit: {url}")
+            log(f"  [O4b] 提交邮箱后: {url}")
 
             if "email-verification" in (url or "") or "verify" in (url or ""):
-                log("  [O5] Waiting for email OTP...")
+                log("  [O5] 正在等待邮箱验证码...")
                 otp = await asyncio.to_thread(get_email_otp, account_email, otp_ts, 90, email_jwt)
                 if not otp:
-                    log("  ✗ No email OTP!")
+                    log("  ✗ 未收到邮箱验证码！")
                     return "email_otp_failed"
-                log(f"  [O5] Email OTP: {otp}")
+                log(f"  [O5] 邮箱验证码: {otp}")
                 await cdp.focus_and_type('input', otp)
                 await asyncio.sleep(0.3)
                 await cdp.click_submit()
                 await asyncio.sleep(8)
                 url = await cdp.url()
-                log(f"  [O6] After email OTP: {url}")
+                log(f"  [O6] 提交邮箱验证码后: {url}")
 
         # Handle consent page
         if "consent" in (url or ""):
-            log("  [O7] Consent page - clicking Allow/Continue...")
+            log("  [O7] 进入授权页，正在点击允许/继续...")
             btn_texts = await cdp.ev("""Array.from(document.querySelectorAll('button')).map(function(b){ return b.textContent.trim().substring(0,60); })""")
-            log(f"  [O7] Buttons found: {btn_texts}")
+            log(f"  [O7] 找到的按钮: {btn_texts}")
             clicked = await cdp.ev("""(function(){
                 var btns = Array.from(document.querySelectorAll('button'));
                 var targets = ['allow', 'continue', 'authorize', 'accept', 'agree', 'yes', 'confirm'];
@@ -254,7 +254,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 }
                 return 'no_button_found';
             })()""")
-            log(f"  [O7] Consent click result: {clicked}")
+            log(f"  [O7] 授权点击结果: {clicked}")
             await asyncio.sleep(3)
             url_now = await cdp.url()
             if "consent" in (url_now or ""):
@@ -262,7 +262,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
                 await asyncio.sleep(5)
             url = await cdp.url()
-            log(f"  [O7b] After consent: {url}")
+            log(f"  [O7b] 授权后: {url}")
 
         # Check for callback
         if "callback" in (url or "") or "localhost:1455" in (url or "") or "chrome-error" in (url or ""):
@@ -274,20 +274,20 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                         if "localhost:1455" in entry.get("url", ""):
                             url = entry["url"]
                             break
-                log(f"  [O7c] Got callback from nav history: {url[:80]}...")
+                log(f"  [O7c] 已从导航历史获取回调地址: {url[:80]}...")
 
             if "localhost:1455" in (url or "") and "code=" in (url or ""):
-                log("  [O8] ✓ CALLBACK!")
+                log("  [O8] ✓ 已获取回调！")
                 parsed = urlparse(url)
                 params = parse_qs(parsed.query)
                 code = params.get("code", [""])[0]
                 cb_state = params.get("state", [""])[0]
 
                 if not code:
-                    log("  ✗ No code in callback URL!")
+                    log("  ✗ 回调 URL 中没有 code！")
                     return "no_callback_code"
 
-                log("  [O9] Exchanging code...")
+                log("  [O9] 正在交换 code...")
                 exchange_body = {"session_id": session_id, "code": code}
                 if cb_state:
                     exchange_body["state"] = cb_state
@@ -298,10 +298,10 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                     token=token, data=exchange_body)
 
                 if exc.get("code") != 0:
-                    log(f"  ✗ Exchange failed: {json.dumps(exc)[:200]}")
+                    log(f"  ✗ code 交换失败: {json.dumps(exc)[:200]}")
                     return "exchange_failed"
 
-                log("  [O10] Creating account in Sub2API...")
+                log("  [O10] 正在 Sub2API 中创建账号...")
                 name = account_email.split("@")[0]
                 acc = sub2api_request("POST", "/api/v1/admin/accounts",
                     token=token, data={
@@ -313,18 +313,18 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                     })
 
                 if acc.get("code") == 0:
-                    log(f"  [O11] ✓✓✓ Account imported! ID: {acc['data'].get('id')}")
+                    log(f"  [O11] ✓✓✓ 账号已导入！ID: {acc['data'].get('id')}")
                     return True
                 else:
-                    log(f"  ✗ Account creation failed: {json.dumps(acc)[:200]}")
+                    log(f"  ✗ 账号创建失败: {json.dumps(acc)[:200]}")
                     return "account_create_failed"
             else:
-                log(f"  ✗ No callback code found in URL: {url}")
+                log(f"  ✗ URL 中未找到回调 code: {url}")
                 return "no_callback_code"
 
-        log(f"  ✗ OAuth failed, final URL: {url}")
+        log(f"  ✗ OAuth 失败，最终 URL: {url}")
         text = await cdp.text(200)
-        log(f"  Text: {text}")
+        log(f"  页面文本: {text}")
         return "oauth_failed"
 
 
@@ -334,17 +334,17 @@ async def main():
     # Load pending accounts
     pending = load_pending_accounts(_args.file, max_count)
     if not pending:
-        log("No pending accounts to import.")
+        log("没有待导入账号。")
         return
 
     log("=" * 60)
-    log(f"  OAUTH IMPORT ({len(pending)} accounts)")
-    log(f"  Proxy: {'enabled' if use_proxy else 'disabled (direct)'}")
+    log(f"  OAuth 导入（{len(pending)} 个账号）")
+    log(f"  代理: {'已启用' if use_proxy else '已禁用（直连）'}")
     log("=" * 60)
 
     # Login Sub2API once
     token = sub2api_login()
-    log(f"[0] Sub2API login OK")
+    log(f"[0] Sub2API 登录成功")
 
     success = 0
     failed = 0
@@ -354,18 +354,18 @@ async def main():
         password = acc["password"]
 
         log(f"\n{'='*60}")
-        log(f"  ACCOUNT {i}/{len(pending)} - {phone}")
+        log(f"  账号 {i}/{len(pending)} - {phone}")
         log(f"{'='*60}")
 
         # Restart Chrome with fresh fingerprint
-        log("[Fingerprint] Restarting Chrome with new profile...")
+        log("[指纹] 正在使用新配置重启 Chrome...")
         restart_chrome_with_fingerprint(use_proxy=use_proxy)
         await asyncio.sleep(3)
 
         # Create temp email for this account
         account_email, email_jwt = random_email()
         if not account_email:
-            log("  ✗ Failed to create temp email, skipping...")
+            log("  ✗ 创建临时邮箱失败，跳过...")
             failed += 1
             save_record({
                 "email": None,
@@ -377,7 +377,7 @@ async def main():
             })
             continue
 
-        log(f"  Email: {account_email}")
+        log(f"  邮箱: {account_email}")
 
         # OAuth import
         result = await oauth_import(phone, password, account_email, token, email_jwt)
@@ -408,7 +408,7 @@ async def main():
 
         # Random delay between accounts
         delay = random.randint(15, 45)
-        log(f"  Waiting {delay}s before next account...")
+        log(f"  等待 {delay} 秒后处理下一个账号...")
         await asyncio.sleep(delay)
 
     summary = {"success": success, "failed": failed, "total": len(pending)}

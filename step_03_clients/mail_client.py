@@ -25,10 +25,10 @@ def get_cloud_mail_token():
     try:
         data = json.loads(r.stdout)
         CLOUD_MAIL_TOKEN = data["data"]["token"]
-        log(f"  Cloud Mail Token 获取成功")
+        log(f"  Cloud Mail 令牌获取成功")
         return CLOUD_MAIL_TOKEN
     except Exception as e:
-        log(f"  Cloud Mail Token 获取失败: {e}")
+        log(f"  Cloud Mail 令牌获取失败: {e}")
         return None
 
 
@@ -77,13 +77,13 @@ def get_email_otp(target_email, after_ts, timeout=90, jwt=None):
                 resp = r.stdout.strip()
                 if not resp.startswith("{"):
                     if attempt <= 3:
-                        log(f"    [email] attempt {attempt}: bad response: {resp[:80]}")
+                        log(f"    [邮件] 第 {attempt} 次查询：响应异常：{resp[:80]}")
                     time.sleep(5)
                     continue
                 data = json.loads(resp)
                 results = data.get("data", [])
                 if attempt <= 3:
-                    log(f"    [email] attempt {attempt}: {len(results)} mails")
+                    log(f"    [邮件] 第 {attempt} 次查询：{len(results)} 封邮件")
                 if not results:
                     time.sleep(5)
                     continue
@@ -95,21 +95,21 @@ def get_email_otp(target_email, after_ts, timeout=90, jwt=None):
                         continue
                     m = re.search(r'(\d{6})', subj)
                     if m:
-                        log(f"    [email] Found OTP in subject: {m.group(1)}")
+                        log(f"    [邮件] 已在主题中找到验证码：{m.group(1)}")
                         return m.group(1)
                     m = re.search(r'>\s*(\d{6})\s*<', raw)
                     if m:
-                        log(f"    [email] Found OTP in html: {m.group(1)}")
+                        log(f"    [邮件] 已在 HTML 中找到验证码：{m.group(1)}")
                         return m.group(1)
                     m = re.search(r'(\d{6})', raw)
                     if m:
-                        log(f"    [email] Found OTP in raw: {m.group(1)}")
+                        log(f"    [邮件] 已在原文中找到验证码：{m.group(1)}")
                         return m.group(1)
                 time.sleep(5)
                 continue
             except Exception as e:
                 if attempt <= 3:
-                    log(f"    [email] error: {e}")
+                    log(f"    [邮件] 查询出错：{e}")
         else:
             # Fallback: Gmail IMAP
             try:
