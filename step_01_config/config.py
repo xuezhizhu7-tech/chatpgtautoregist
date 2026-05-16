@@ -71,19 +71,8 @@ FALLBACK_COUNTRIES = [
 ]
 
 # ============================================================
-# Mihomo Proxy (auto_batch_monitor)
+# Batch monitor
 # ============================================================
-MIHOMO_API = _env("MIHOMO_API", "http://127.0.0.1:9091")
-PROXY_PORT = _env_int("PROXY_PORT", 7892)
-
-PROXIES = [
-    {"name": "direct", "mihomo": None},           # No proxy (OC24 direct)
-    {"name": "jp-residential", "mihomo": "jp-residential"},
-    {"name": "us99-ss", "mihomo": "us99-ss"},
-    {"name": "kkyun-ss", "mihomo": "kkyun-ss"},
-]
-
-MAX_PER_PROXY = _env_int("MAX_PER_PROXY", 10)
 BATCH_SIZE = _env_int("BATCH_SIZE", 5)
 
 # ============================================================

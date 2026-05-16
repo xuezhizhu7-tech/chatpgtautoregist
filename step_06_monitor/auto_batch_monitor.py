@@ -3,8 +3,7 @@
 Auto-monitor SMS stock and batch register when available.
 - Checks stock every 5 minutes
 - Runs N accounts per batch, verifies no phone waste
-- Rotates proxy every MAX_PER_PROXY accounts
-- Proxies: direct (no proxy), jp-residential, us99-ss, kkyun-ss
+- Runs batches through the local network directly
 """
 import subprocess, json, time, os, sys
 from datetime import datetime
@@ -16,7 +15,7 @@ if PROJECT_ROOT not in sys.path:
 from step_01_config.config import (
     HEROSMS_KEY, HEROSMS, SERVICE, MAX_PRICE,
     MONITOR_COUNTRIES as COUNTRIES,
-    MIHOMO_API, PROXY_PORT, PROXIES, MAX_PER_PROXY, BATCH_SIZE,
+    BATCH_SIZE,
     SCRIPT, LOG_DIR, STATE_FILE,
 )
 
@@ -32,7 +31,7 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
             return json.load(f)
-    return {"proxy_idx": 0, "accounts_on_current_proxy": 0, "total_success": 0, "total_failed": 0, "total_wasted_numbers": 0}
+    return {"total_success": 0, "total_failed": 0, "total_wasted_numbers": 0}
 
 
 def save_state(state):
@@ -62,28 +61,7 @@ def check_stock():
     return None, 0, 0, 0
 
 
-def switch_proxy(proxy_info):
-    """Switch mihomo proxy node. Proxy flag is passed to register.py via --no-proxy."""
-    if proxy_info["mihomo"] is not None:
-        # Switch mihomo node
-        subprocess.run(["curl", "-s", "-X", "PUT",
-            f"{MIHOMO_API}/proxies/GLOBAL",
-            "-d", json.dumps({"name": proxy_info["mihomo"]})],
-            capture_output=True, timeout=5)
-        # Verify
-        try:
-            r = subprocess.run(["curl", "-s", "--proxy", f"http://127.0.0.1:{PROXY_PORT}",
-                "--max-time", "10", "https://api.ipify.org"],
-                capture_output=True, text=True, timeout=15)
-            ip = r.stdout.strip()
-            log(f"  Proxy: {proxy_info['name']} (IP: {ip})")
-        except Exception:
-            log(f"  Proxy: {proxy_info['name']} (IP check failed)")
-    else:
-        log(f"  Proxy: DIRECT (OC24 IP)")
-
-
-def run_batch(batch_size, country_info=None, proxy_info=None):
+def run_batch(batch_size, country_info=None):
     """Run a batch of registrations, return (success, failed, wasted_numbers)"""
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     logfile = f"{LOG_DIR}/batch_{ts}.log"
@@ -91,12 +69,11 @@ def run_batch(batch_size, country_info=None, proxy_info=None):
     env = os.environ.copy()
     env["DISPLAY"] = ":99"
 
-    # Build command with country + proxy flags
+    # Build command with country flags. Proxy mode is disabled for stability.
     cmd = ["python3", "-u", SCRIPT, str(batch_size)]
     if country_info:
         cmd += ["--country", str(country_info["id"]), "--dial", country_info["dial"], "--iso", country_info["iso"]]
-    if proxy_info and proxy_info["mihomo"] is None:
-        cmd += ["--no-proxy"]
+    cmd += ["--no-proxy"]
 
     country_name = country_info["name"] if country_info else "default"
     log(f"  Running batch of {batch_size} ({country_name})...")
@@ -167,7 +144,7 @@ def main():
     log("=" * 50)
 
     state = load_state()
-    log(f"State: proxy_idx={state['proxy_idx']}, on_current={state['accounts_on_current_proxy']}, total_success={state['total_success']}")
+    log(f"State: total_success={state['total_success']}, total_failed={state['total_failed']}")
 
     consecutive_no_stock = 0
 
@@ -213,20 +190,12 @@ def main():
             time.sleep(300)
             continue
 
-        # Check if we need to rotate proxy
-        if state["accounts_on_current_proxy"] >= MAX_PER_PROXY:
-            state["proxy_idx"] = (state["proxy_idx"] + 1) % len(PROXIES)
-            state["accounts_on_current_proxy"] = 0
-            log(f"  Rotating proxy -> {PROXIES[state['proxy_idx']]['name']}")
-
-        # Set proxy
-        proxy = PROXIES[state["proxy_idx"]]
-        switch_proxy(proxy)
+        log("  Proxy: DIRECT (local network)")
 
         # Run batch
         batch = min(BATCH_SIZE, count)
         try:
-            success, failed, wasted = run_batch(batch, active_country, proxy_info=proxy)
+            success, failed, wasted = run_batch(batch, active_country)
         except subprocess.TimeoutExpired:
             log("  ⚠ Batch timed out (30min). Continuing...")
             success, failed, wasted = 0, batch, 0
@@ -238,7 +207,6 @@ def main():
         state["total_success"] += success
         state["total_failed"] += failed
         state["total_wasted_numbers"] += wasted
-        state["accounts_on_current_proxy"] += success
         save_state(state)
 
         # Report

@@ -3,7 +3,7 @@
 CDP browser automation class and Chrome restart with fingerprint.
 """
 import json, asyncio, time, random, subprocess
-from step_01_config.config import CDP_PORT, PROXY_PORT, WINDOW_SIZES, USER_AGENTS, TIMEZONES, LANGUAGES
+from step_01_config.config import CDP_PORT, WINDOW_SIZES, USER_AGENTS, TIMEZONES, LANGUAGES
 from step_02_shared.records import log
 
 
@@ -131,12 +131,13 @@ class CDP:
         }})()""")
 
 
-def restart_chrome_with_fingerprint(use_proxy=True):
+def restart_chrome_with_fingerprint(use_proxy=False):
     """Kill Chrome and restart with randomized fingerprint (runs on OC24 locally)
 
     Args:
-        use_proxy: If True, add --proxy-server flag; if False, skip it (direct connection).
+        use_proxy: Kept for caller compatibility; proxy mode is disabled.
     """
+    _ = use_proxy
     w, h = random.choice(WINDOW_SIZES)
     ua = random.choice(USER_AGENTS)
 
@@ -158,9 +159,6 @@ def restart_chrome_with_fingerprint(use_proxy=True):
     chrome += " --disable-features=PasswordManager"
     chrome += " --disable-popup-blocking --password-store=basic"
     chrome += f" --user-agent='{ua}'"
-    if use_proxy:
-        chrome += f" --proxy-server=http://127.0.0.1:{PROXY_PORT}"
-        chrome += " --proxy-bypass-list='localhost,127.0.0.1'"
     chrome += " 'about:blank' > /dev/null 2>" + chr(38) + "1 " + chr(38)
     lines.append(chrome)
     lines.append("CPID=$!")
@@ -175,7 +173,7 @@ def restart_chrome_with_fingerprint(use_proxy=True):
     r = subprocess.run(["bash", "/tmp/launch_chrome_fp.sh"],
         capture_output=True, text=True, timeout=30)
     ok = "CDP_SUCCESS" in r.stdout
-    proxy_mode = "proxy" if use_proxy else "direct"
+    proxy_mode = "direct"
     log(f"  Chrome restarted: {w}x{h}, UA: ...{ua[-30:]}, mode={proxy_mode}, CDP: {'OK' if ok else 'FAIL'}")
     if not ok:
         log(f"  stdout: {r.stdout[:200]}")

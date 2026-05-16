@@ -22,7 +22,7 @@ _parser.add_argument("count", nargs="?", type=int, default=2, help="Number of ac
 _parser.add_argument("--country", type=int, help="Override country ID")
 _parser.add_argument("--dial", type=str, help="Override dial code")
 _parser.add_argument("--iso", type=str, help="Override ISO code")
-_parser.add_argument("--no-proxy", action="store_true", help="Disable proxy (direct connection)")
+_parser.add_argument("--no-proxy", action="store_true", help="Ignored; proxy mode is disabled")
 _args, _ = _parser.parse_known_args()
 
 # Build country config from overrides (returns dict, no mutable globals)
@@ -31,7 +31,7 @@ country_cfg = apply_country_override(
     dial=_args.dial,
     iso=_args.iso,
 )
-use_proxy = not _args.no_proxy
+use_proxy = False
 
 
 def random_password():

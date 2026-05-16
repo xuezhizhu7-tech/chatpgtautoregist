@@ -29,6 +29,5 @@ fi
 echo
 echo "Examples:"
 echo "  reg 1"
-echo "  reg 2 --no-proxy"
 echo "  oauth 1"
-echo "  oauth 3 --no-proxy"
+echo "  oauth 3"
