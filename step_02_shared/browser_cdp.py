@@ -93,7 +93,7 @@ class CDP:
             var btn = document.querySelector('button[type="submit"]');
             if(!btn) btn = Array.from(document.querySelectorAll('button')).find(function(b){
                 var t = b.textContent.trim();
-                return t === 'Continue' || t === '继续';
+                return t === 'Continue' || t === '继续' || /finish creating account/i.test(t);
             });
             if(btn) btn.click();
         })()""")

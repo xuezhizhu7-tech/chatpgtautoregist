@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
 Shared configuration for auto_batch_monitor, register, and oauth_import.
-Secrets must be provided through environment variables.
+Secrets can be provided through step_01_config/local_secrets.py or environment variables.
 """
 import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+try:
+    from step_01_config import local_secrets
+except ImportError:
+    local_secrets = None
+
 
 def _env(key, default=""):
     """Read from environment, fall back to default."""
-    return os.environ.get(key, default)
+    if key in os.environ:
+        return os.environ[key]
+    if local_secrets and hasattr(local_secrets, key):
+        return getattr(local_secrets, key)
+    return default
 
 
 def _env_int(key, default):
@@ -22,9 +31,9 @@ def _env_float(key, default):
 
 
 def _required_env(key):
-    value = os.environ.get(key)
+    value = _env(key, "")
     if not value:
-        raise RuntimeError(f"Missing required environment variable: {key}")
+        raise RuntimeError(f"Missing required secret: {key} (set it in step_01_config/local_secrets.py or environment)")
     return value
 
 
@@ -48,16 +57,16 @@ DEFAULT_COUNTRY = {
 
 # Countries to monitor (auto_batch_monitor)
 MONITOR_COUNTRIES = [
-    {"id": 16, "name": "UK", "dial": "44", "iso": "GB"},
     {"id": 151, "name": "Chile", "dial": "56", "iso": "CL"},
+    {"id": 16, "name": "UK", "dial": "44", "iso": "GB"},
 ]
 
 # Fallback countries for buying numbers (register.py)
-# (hero_id, dial_code, iso, name) - cheapest first
+# (hero_id, dial_code, iso, name) - preferred order
 FALLBACK_COUNTRIES = [
+    (151, "56", "CL", "Chile"),
     (16,  "44", "GB", "UK"),
     (4,   "63", "PH", "Philippines"),
-    (151, "56", "CL", "Chile"),
     (73,  "73", "IN", "India"),
 ]
 

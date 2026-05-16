@@ -64,7 +64,7 @@ def buy_number(country_cfg=None):
             parts = r.stdout.split(":")
             act_id = parts[1]
             phone = parts[2]
-            updated_cfg = {"id": hero_id, "dial": dial, "iso": iso, "name": name}
+            updated_cfg = {"id": hero_id, "dial": dial, "iso": iso, "name": name, "bought_at": time.time()}
             log(f"  Number from {name} (${country_price:.3f})")
             return act_id, phone, updated_cfg
 
@@ -72,30 +72,68 @@ def buy_number(country_cfg=None):
     return None, None, country_cfg
 
 
-def cancel_number(act_id):
-    subprocess.run(["curl", "-sS", "--max-time", "10",
+def cancel_number(act_id, bought_at=None):
+    log(f"  [SMS] Cancelling number act_id={act_id}...")
+    r = subprocess.run(["curl", "-sS", "--max-time", "10",
         f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
         capture_output=True, text=True)
+    resp = r.stdout.strip()
+    log(f"  [SMS] Cancel response: {resp or 'empty response'}")
+
+    if "EARLY_CANCEL_DENIED" in resp:
+        min_activation = 120
+        try:
+            data = json.loads(resp)
+            min_activation = int(data.get("info", {}).get("minActivationTime", min_activation))
+        except Exception:
+            pass
+        if bought_at:
+            wait = max(0, min_activation - int(time.time() - bought_at) + 2)
+        else:
+            wait = min_activation + 2
+        log(f"  [SMS] Early cancel denied; waiting {wait}s before retry...")
+        remaining = wait
+        while remaining > 0:
+            if remaining <= 5:
+                sleep_for = 1
+            else:
+                sleep_for = min(10, remaining - 5)
+            log(f"  [SMS] Cancel retry countdown: {remaining}s remaining")
+            time.sleep(sleep_for)
+            remaining -= sleep_for
+        r = subprocess.run(["curl", "-sS", "--max-time", "10",
+            f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
+            capture_output=True, text=True)
+        log(f"  [SMS] Cancel retry response: {r.stdout.strip() or 'empty response'}")
 
 
 def finish_number(act_id):
-    subprocess.run(["curl", "-sS", "--max-time", "10",
+    log(f"  [SMS] Finishing number act_id={act_id}...")
+    r = subprocess.run(["curl", "-sS", "--max-time", "10",
         f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=6"],
         capture_output=True, text=True)
+    log(f"  [SMS] Finish response: {r.stdout.strip() or 'empty response'}")
 
 
-def get_sms(act_id, timeout=150):
+def get_sms(act_id, timeout=150, bought_at=None):
     """Poll for SMS code (blocking). Use asyncio.to_thread() from async callers."""
     deadline = time.time() + timeout
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
         r = subprocess.run(["curl", "-sS", "--max-time", "10",
             f"{HEROSMS}?api_key={HEROSMS_KEY}&action=getStatus&id={act_id}"],
             capture_output=True, text=True)
+        status = r.stdout.strip()
+        remaining = max(0, int(deadline - time.time()))
         if "STATUS_OK" in r.stdout:
+            log(f"  [SMS] attempt {attempt}: received code")
             return r.stdout.split(":")[1]
         if "STATUS_CANCEL" in r.stdout:
+            log(f"  [SMS] attempt {attempt}: cancelled by provider")
             return None
+        log(f"  [SMS] attempt {attempt}: {status or 'empty response'}; {remaining}s remaining")
         time.sleep(10)
     log(f"  [SMS] Timeout after {timeout}s, cancelling number {act_id}")
-    cancel_number(act_id)
+    cancel_number(act_id, bought_at)
     return None

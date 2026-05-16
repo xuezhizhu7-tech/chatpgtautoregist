@@ -151,7 +151,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         # Should be on password page
         if "password" not in (url or ""):
             log(f"  ✗ Not on password page: {url}")
-            return False
+            return "no_password_page"
 
         # Enter password
         await asyncio.sleep(1)
@@ -172,15 +172,45 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         log(f"  [O3a] Password field length: {pwd_len}")
         await asyncio.sleep(0.5)
         await cdp.click_submit()
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         # Fallback: press Enter if still on password page
         url_now = await cdp.url()
-        if "log-in/password" in (url_now or ""):
+        if "log-in/password" in (url_now or "") or "password" in (url_now or ""):
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
-            await asyncio.sleep(6)
+            await asyncio.sleep(4)
+
         url = await cdp.url()
-        log(f"  [O3] After password: {url}")
+        log(f"  [O3] After password submit: {url}")
+
+        # If still on password page after first attempt, diagnose and retry
+        if "password" in (url or ""):
+            diag = await cdp.ev("""(function(){
+                var inputs = Array.from(document.querySelectorAll('input')).map(function(i){
+                    return {name:i.name, type:i.type, value_len:(i.value||'').length, disabled:i.disabled};
+                });
+                var errors = Array.from(document.querySelectorAll('[role="alert"],.error,.field-error,.form-error,.msg-error')).map(function(e){ return e.textContent.trim().substring(0,120); });
+                var buttons = Array.from(document.querySelectorAll('button')).map(function(b){
+                    return {text:b.textContent.trim().substring(0,60), disabled:b.disabled};
+                });
+                return JSON.stringify({inputs:inputs, errors:errors, buttons:buttons});
+            })()""")
+            log(f"  [O3d] Still on password page — diag: {diag}")
+
+            # Retry: re-focus password field, re-type, and click submit
+            log("  [O3d] Retrying password submit...")
+            await cdp.ev('var el=document.querySelector(\'input[type="password"]\'); if(el){el.focus(); el.click();}')
+            await asyncio.sleep(0.3)
+            await cdp.click_submit()
+            await asyncio.sleep(4)
+
+            url = await cdp.url()
+            log(f"  [O3d] After retry: {url}")
+
+            # Still stuck? Log page text snippet for more context
+            if "password" in (url or ""):
+                text = await cdp.text(300)
+                log(f"  [O3d] Page text: {text}")
 
         # Handle add-email
         if "add-email" in (url or ""):
@@ -198,7 +228,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 otp = await asyncio.to_thread(get_email_otp, account_email, otp_ts, 90, email_jwt)
                 if not otp:
                     log("  ✗ No email OTP!")
-                    return False
+                    return "email_otp_failed"
                 log(f"  [O5] Email OTP: {otp}")
                 await cdp.focus_and_type('input', otp)
                 await asyncio.sleep(0.3)
@@ -255,7 +285,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
                 if not code:
                     log("  ✗ No code in callback URL!")
-                    return False
+                    return "no_callback_code"
 
                 log("  [O9] Exchanging code...")
                 exchange_body = {"session_id": session_id, "code": code}
@@ -269,7 +299,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
                 if exc.get("code") != 0:
                     log(f"  ✗ Exchange failed: {json.dumps(exc)[:200]}")
-                    return False
+                    return "exchange_failed"
 
                 log("  [O10] Creating account in Sub2API...")
                 name = account_email.split("@")[0]
@@ -287,15 +317,15 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                     return True
                 else:
                     log(f"  ✗ Account creation failed: {json.dumps(acc)[:200]}")
-                    return False
+                    return "account_create_failed"
             else:
                 log(f"  ✗ No callback code found in URL: {url}")
-                return False
+                return "no_callback_code"
 
         log(f"  ✗ OAuth failed, final URL: {url}")
         text = await cdp.text(200)
         log(f"  Text: {text}")
-        return False
+        return "oauth_failed"
 
 
 async def main():
@@ -339,7 +369,7 @@ async def main():
             failed += 1
             save_record({
                 "email": None,
-                "phone": f"+{phone}",
+                "phone": phone,
                 "password": password,
                 "phase": 2,
                 "status": "email_create_failed",
@@ -350,13 +380,13 @@ async def main():
         log(f"  Email: {account_email}")
 
         # OAuth import
-        imported = await oauth_import(phone, password, account_email, token, email_jwt)
+        result = await oauth_import(phone, password, account_email, token, email_jwt)
 
-        if imported:
+        if result is True:
             success += 1
             save_record({
                 "email": account_email,
-                "phone": f"+{phone}",
+                "phone": phone,
                 "password": password,
                 "phase": 2,
                 "status": "imported",
@@ -365,15 +395,16 @@ async def main():
             log(f"  ✓ DONE! Total: {success} success, {failed} failed")
         else:
             failed += 1
+            status = result if isinstance(result, str) else "oauth_failed"
             save_record({
                 "email": account_email,
-                "phone": f"+{phone}",
+                "phone": phone,
                 "password": password,
                 "phase": 2,
-                "status": "oauth_failed",
+                "status": status,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
             })
-            log(f"  ✗ OAuth failed. Total: {success} success, {failed} failed")
+            log(f"  ✗ OAuth failed ({status}). Total: {success} success, {failed} failed")
 
         # Random delay between accounts
         delay = random.randint(15, 45)

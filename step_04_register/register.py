@@ -42,7 +42,7 @@ async def register_account():
     """Register new account with phone number. Returns dict or None."""
     act_id, phone, country_cfg = buy_number()
     if not act_id:
-        log("  鉁?Failed to buy number")
+        log("  ✗ Failed to buy number")
         return None
 
     password = random_password()
@@ -91,8 +91,8 @@ async def register_account():
             await asyncio.sleep(8)
             body_text = await cdp.ev("document.body ? document.body.innerText.substring(0,200) : ''")
             if "unable to load" in (body_text or "").lower():
-                log("  鉁?Site still blocked after retry")
-                cancel_number(act_id)
+                log("  ✗ Site still blocked after retry")
+                cancel_number(act_id, country_cfg.get("bought_at"))
                 save_record({
                     "phone": f"+{phone}" if phone else None,
                     "password": password,
@@ -185,9 +185,9 @@ async def register_account():
             if not has_tel:
                 url = await cdp.url()
                 body = await cdp.ev("document.body ? document.body.innerText.substring(0,200) : ''")
-                log(f"  鉁?Cannot reach phone input. URL: {url}")
+                log(f"  ✗ Cannot reach phone input. URL: {url}")
                 log(f"    Body: {body[:100]}")
-                cancel_number(act_id)
+                cancel_number(act_id, country_cfg.get("bought_at"))
                 save_record({
                     "phone": f"+{phone}" if phone else None,
                     "password": password,
@@ -214,7 +214,7 @@ async def register_account():
         # Check if number already registered
         if "log-in/password" in (url or ""):
             log("  [!] Number already registered, marking failed without retry.")
-            cancel_number(act_id)
+            cancel_number(act_id, country_cfg.get("bought_at"))
             save_record({
                 "phone": f"+{phone}",
                 "password": password,
@@ -232,8 +232,8 @@ async def register_account():
             log(f"  [4b] Recheck: {url}")
 
         if "password" not in (url or ""):
-            log(f"  鉁?Unexpected page: {url}")
-            cancel_number(act_id)
+            log(f"  ✗ Unexpected page: {url}")
+            cancel_number(act_id, country_cfg.get("bought_at"))
             save_record({
                 "phone": f"+{phone}",
                 "password": password,
@@ -332,23 +332,31 @@ async def register_account():
             log(f"  [5e] Inputs: {fail_inputs}")
             log(f"  [5e] Errors: {fail_errors}")
             log(f"  [5e] Text: {fail_text[:500]}")
-            cancel_number(act_id)
+            failure_text = (fail_text or "").lower()
+            failure_errors_text = " ".join(fail_errors or []).lower()
+            if "account for this phone number already exists" in failure_text or "account for this phone number already exists" in failure_errors_text:
+                failure_status = "already_registered"
+                log("  [5e] Detected existing account for this phone number")
+            else:
+                failure_status = "password_submit_failed"
+            cancel_number(act_id, country_cfg.get("bought_at"))
             save_record({
                 "phone": f"+{phone}",
                 "password": password,
                 "phase": 1,
-                "status": "password_submit_failed",
+                "status": failure_status,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
             })
-            return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": "password_submit_failed", "recorded": True}
+            return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": failure_status, "recorded": True}
 
         # Wait for SMS (non-blocking via asyncio.to_thread)
         log("  [6] Waiting for SMS...")
-        sms_code = await asyncio.to_thread(get_sms, act_id, 120)
+        sms_code = await asyncio.to_thread(get_sms, act_id, 120, country_cfg.get("bought_at"))
 
         if not sms_code:
             log("  SMS timeout, marking failed without retry.")
-            cancel_number(act_id)
+            log("  [SMS] Confirming number cancellation after timeout...")
+            cancel_number(act_id, country_cfg.get("bought_at"))
             save_record({
                 "phone": f"+{phone}",
                 "password": password,
@@ -401,25 +409,67 @@ async def register_account():
             age_len = await cdp.ev("document.querySelector('input[name=\"age\"]')?.value?.length || 0")
             log(f"  [8b] Filled about-you: name_ok={name_ok}, name_len={name_len}, has_age={has_age}, age_ok={age_ok}, age_len={age_len}")
             await asyncio.sleep(0.3)
-            await cdp.click_submit()
-            await asyncio.sleep(5)
-            await cdp.ev("""(function(){
-                var btns = Array.from(document.querySelectorAll('button'));
-                var c = btns.find(function(b){
-                    var t = b.textContent.trim();
-                    return t==='Confirm'||t==='纭畾';
+
+            # Check all consent checkboxes (React requires click() to sync state)
+            # 1) Click "allCheckboxes" first so it propagates to individual consents
+            # 2) Only click visible & enabled checkboxes; skip hidden/disabled
+            checked_count = await cdp.ev("""(function(){
+                var count = 0;
+                // Try clicking the "select all" checkbox first
+                var allCb = document.querySelector('input[name="allCheckboxes"]');
+                if(allCb && !allCb.checked && !allCb.disabled && allCb.offsetParent !== null){
+                    allCb.click();
+                    count++;
+                }
+                // Then ensure every visible+enabled checkbox is checked
+                var boxes = document.querySelectorAll('input[type="checkbox"]');
+                boxes.forEach(function(cb){
+                    if(!cb.checked && !cb.disabled && cb.offsetParent !== null){
+                        cb.click();
+                        count++;
+                    }
                 });
-                if(c) c.click();
+                return count;
             })()""")
-            await asyncio.sleep(3)
-            await cdp.click_submit()
+            await asyncio.sleep(0.5)
+            all_checked = await cdp.ev("""Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(function(cb){ return !cb.disabled && cb.offsetParent !== null; }).every(function(cb){ return cb.checked; })""")
+            log(f"  [8c] Checkboxes: clicked {checked_count}, all_checked={all_checked}")
+            await asyncio.sleep(0.3)
+
+            # Click "Finish creating account" button
+            btn_clicked = await cdp.ev("""(function(){
+                var btns = Array.from(document.querySelectorAll('button'));
+                var btn = btns.find(function(b){
+                    var t = b.textContent.trim();
+                    return /finish creating account/i.test(t);
+                });
+                if(!btn) btn = document.querySelector('button[type="submit"]');
+                if(btn && !btn.disabled){ btn.click(); return btn.textContent.trim(); }
+                if(btn && btn.disabled) return 'disabled:' + btn.textContent.trim();
+                return null;
+            })()""")
+            log(f"  [8c] Button clicked: {btn_clicked}")
             await asyncio.sleep(10)
             url = await cdp.url()
             log(f"  [8] After about-you: {url}")
 
+            # Diagnose: if still on about-you, log page state for debugging
+            if "about-you" in (url or ""):
+                diag = await cdp.ev("""(function(){
+                    var inputs = Array.from(document.querySelectorAll('input')).map(function(i){
+                        return {name:i.name, type:i.type, checked:i.checked, disabled:i.disabled, value_len:(i.value||'').length};
+                    });
+                    var errors = Array.from(document.querySelectorAll('[role="alert"],.error,.field-error,.form-error')).map(function(e){ return e.textContent.trim(); });
+                    var buttons = Array.from(document.querySelectorAll('button')).map(function(b){
+                        return {text:b.textContent.trim(), disabled:b.disabled};
+                    });
+                    return JSON.stringify({inputs:inputs, errors:errors, buttons:buttons});
+                })()""")
+                log(f"  [8e] Still on about-you — diag: {diag}")
+
         # Check success
         if "chatgpt.com" in (url or "") and "auth" not in (url or ""):
-            log("  鉁?Registration successful!")
+            log("  ✓ Registration successful!")
             finish_number(act_id)
             return {"phone": phone, "password": password, "act_id": act_id}
 
@@ -430,13 +480,20 @@ async def register_account():
             await asyncio.sleep(8)
             url = await cdp.url()
             if "chatgpt.com" in (url or "") and "auth" not in (url or ""):
-                log("  鉁?Account created despite error!")
+                log("  ✓ Account created despite error!")
                 finish_number(act_id)
                 return {"phone": phone, "password": password, "act_id": act_id}
 
-        log(f"  鉁?Registration failed, final URL: {url}")
-        cancel_number(act_id)
-        return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True}
+        # Classify failure
+        fail_reason = "reg_failed"
+        if "about-you" in (url or ""):
+            fail_reason = "about_you_failed"
+        elif "verify" in (url or ""):
+            fail_reason = "verify_failed"
+
+        log(f"  ✗ Registration failed ({fail_reason}), final URL: {url}")
+        cancel_number(act_id, country_cfg.get("bought_at"))
+        return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": fail_reason}
 
 
 async def main():
@@ -508,7 +565,7 @@ async def main():
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
         })
         success += 1
-        log(f"  鉁?Registered! Total: {success} success, {failed} failed")
+        log(f"  ✓ Registered! Total: {success} success, {failed} failed")
 
         # Random delay between accounts
         delay = random.randint(15, 45)
