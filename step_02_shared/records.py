@@ -21,12 +21,12 @@ def log(msg):
 
 
 def log_sensitive(phone=None, password=None, extra_msg=""):
-    """Log with encoded phone/password to bypass platform masking."""
+    """Log phone/password in plaintext for local registration output."""
     parts = []
     if phone:
-        parts.append(f"手机号:{_enc(phone)}")
+        parts.append(f"phone:{phone}")
     if password:
-        parts.append(f"密码:{_enc(password)}")
+        parts.append(f"password:{password}")
     if extra_msg:
         parts.append(extra_msg)
     log("  " + " | ".join(parts))

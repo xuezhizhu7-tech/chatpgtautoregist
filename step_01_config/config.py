@@ -97,6 +97,7 @@ GMAIL_PASS = _env("GMAIL_PASS", "")
 # Browser / CDP (register.py / oauth_import.py)
 # ============================================================
 CDP_PORT = _env_int("CDP_PORT", 9336)
+CHROME_PROFILE_DIR = _env("CHROME_PROFILE_DIR", f"/tmp/chrome-reg-{CDP_PORT}")
 
 # ============================================================
 # Account defaults (register.py)

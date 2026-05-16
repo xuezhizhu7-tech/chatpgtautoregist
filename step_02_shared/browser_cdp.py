@@ -3,7 +3,7 @@
 CDP browser automation class and Chrome restart with fingerprint.
 """
 import json, asyncio, time, random, subprocess
-from step_01_config.config import CDP_PORT, WINDOW_SIZES, USER_AGENTS, TIMEZONES, LANGUAGES
+from step_01_config.config import CDP_PORT, CHROME_PROFILE_DIR, WINDOW_SIZES, USER_AGENTS, TIMEZONES, LANGUAGES
 from step_02_shared.records import log
 
 
@@ -144,12 +144,12 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     lines = []
     lines.append("#!/bin/bash")
     lines.append("export DISPLAY=:99")
-    lines.append("pkill -f 'chromium.*9336' 2>/dev/null")
+    lines.append(f"pkill -f 'chromium.*--remote-debugging-port={CDP_PORT}' 2>/dev/null")
     lines.append("sleep 2")
-    lines.append("rm -rf /tmp/chrome-reg-current")
+    lines.append(f"rm -rf '{CHROME_PROFILE_DIR}'")
     chrome = "/snap/bin/chromium"
-    chrome += " --remote-debugging-port=9336"
-    chrome += " --user-data-dir=/tmp/chrome-reg-current"
+    chrome += f" --remote-debugging-port={CDP_PORT}"
+    chrome += f" --user-data-dir='{CHROME_PROFILE_DIR}'"
     chrome += " --no-first-run --no-default-browser-check"
     chrome += " --disable-background-networking --disable-sync"
     chrome += f" --disable-extensions --window-size={w},{h}"
@@ -164,15 +164,17 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     lines.append("CPID=$!")
     lines.append("echo Chrome_PID:$CPID")
     lines.append("sleep 6")
-    lines.append("curl -sS http://127.0.0.1:9336/json/version 2>/dev/null && echo CDP_SUCCESS || echo CDP_FAIL")
+    lines.append(f"curl -sS http://127.0.0.1:{CDP_PORT}/json/version 2>/dev/null && echo CDP_SUCCESS || echo CDP_FAIL")
 
     script_content = chr(10).join(lines) + chr(10)
-    with open("/tmp/launch_chrome_fp.sh", "w") as f:
+    launch_script = f"/tmp/launch_chrome_fp_{CDP_PORT}.sh"
+    with open(launch_script, "w") as f:
         f.write(script_content)
 
-    r = subprocess.run(["bash", "/tmp/launch_chrome_fp.sh"],
+    r = subprocess.run(["bash", launch_script],
         capture_output=True, text=True, timeout=30)
     ok = "CDP_SUCCESS" in r.stdout
+    log(f"  Chrome worker: port={CDP_PORT}, profile={CHROME_PROFILE_DIR}")
     proxy_mode = "直连"
     log(f"  Chrome 已重启：{w}x{h}，UA: ...{ua[-30:]}，模式={proxy_mode}，CDP: {'正常' if ok else '失败'}")
     if not ok:
