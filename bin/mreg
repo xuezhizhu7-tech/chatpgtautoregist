@@ -9,5 +9,4 @@ while [[ -L "$script_path" ]]; do
 done
 
 repo_dir="$(cd -P "$(dirname "$script_path")/.." && pwd)"
-
-exec bash "$repo_dir/bin/workers" reg 3 1
+exec bash "$repo_dir/bin/workers" reg "$@"

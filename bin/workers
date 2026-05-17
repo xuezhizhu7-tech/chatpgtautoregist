@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  script_dir="$(cd -P "$(dirname "$script_path")" && pwd)"
+  script_path="$(readlink "$script_path")"
+  [[ "$script_path" != /* ]] && script_path="${script_dir}/${script_path}"
+done
+
+repo_dir="$(cd -P "$(dirname "$script_path")/.." && pwd)"
+cd "$repo_dir"
+
+base_port="${WORKER_BASE_PORT:-9336}"
+log_dir="${WORKER_LOG_DIR:-worker_logs}"
+mkdir -p "$log_dir"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  reg
+  logreg
+  oauth
+  oauthlog
+
+Examples:
+  reg
+  logreg
+  oauth
+  oauthlog
+EOF
+}
+
+worker_env() {
+  local worker="$1"
+  local port=$((base_port + worker - 1))
+
+  export WORKER_ID="$worker"
+  export CDP_PORT="$port"
+  export CHROME_PROFILE_DIR="/tmp/chrome-reg-$port"
+  export ACCOUNTS_LOG="$repo_dir/accounts_worker_${worker}.jsonl"
+}
+
+start_reg() {
+  local workers="${1:-}"
+  local count="${2:-1}"
+  if [[ -z "$workers" ]]; then
+    usage
+    exit 1
+  fi
+
+  for worker in $(seq 1 "$workers"); do
+    worker_env "$worker"
+    local log_file="$repo_dir/$log_dir/reg_worker_${worker}.log"
+    echo "Starting reg worker $worker: port=$CDP_PORT accounts=$ACCOUNTS_LOG log=$log_file"
+    nohup python3 step_04_register/register.py "$count" > "$log_file" 2>&1 &
+  done
+
+  echo
+  echo "Started $workers register worker(s)."
+  echo "View logs: logs"
+}
+
+start_oauth() {
+  local workers="${1:-}"
+  local count="${2:-0}"
+  if [[ -z "$workers" ]]; then
+    usage
+    exit 1
+  fi
+
+  for worker in $(seq 1 "$workers"); do
+    worker_env "$worker"
+    local log_file="$repo_dir/$log_dir/oauth_worker_${worker}.log"
+    local args=(--file "$ACCOUNTS_LOG")
+    if [[ "$count" != "0" ]]; then
+      args+=(--count "$count")
+    fi
+    echo "Starting oauth worker $worker: port=$CDP_PORT accounts=$ACCOUNTS_LOG log=$log_file"
+    nohup python3 step_05_import/oauth_import.py "${args[@]}" > "$log_file" 2>&1 &
+  done
+
+  echo
+  echo "Started $workers OAuth worker(s)."
+  echo "View logs: logs"
+}
+
+show_logs() {
+  local pattern="${1:-*.log}"
+  if ! compgen -G "$log_dir/$pattern" > /dev/null; then
+    echo "No logs found for $pattern in $log_dir yet."
+    exit 0
+  fi
+  tail -f "$log_dir"/$pattern
+}
+
+show_ps() {
+  ps aux | grep -E "step_04_register/register.py|step_05_import/oauth_import.py" | grep -v grep || true
+}
+
+stop_workers() {
+  pkill -f "step_04_register/register.py" 2>/dev/null || true
+  pkill -f "step_05_import/oauth_import.py" 2>/dev/null || true
+  echo "Stopped register/oauth worker processes."
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  reg) start_reg "$@" ;;
+  oauth) start_oauth "$@" ;;
+  logs) show_logs "*.log" ;;
+  logreg) show_logs "reg_worker_*.log" ;;
+  oauthlog) show_logs "oauth_worker_*.log" ;;
+  ps) show_ps ;;
+  stop) stop_workers ;;
+  ""|-h|--help|help) usage ;;
+  *)
+    echo "Unknown command: $cmd"
+    usage
+    exit 1
+    ;;
+esac

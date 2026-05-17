@@ -1,230 +1,154 @@
 #!/usr/bin/env python3
 """
-Auto-monitor SMS stock and batch register when available.
-- Checks stock every 5 minutes
-- Runs N accounts per batch, verifies no phone waste
-- Runs batches through the local network directly
+Monitor HeroSMS stock and query phone numbers only.
+
+This script no longer starts registration batches or buys phone numbers. It
+only checks configured countries and prints available stock.
 """
-import subprocess, json, time, os, sys
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
 from datetime import datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from step_01_config.config import (
-    HEROSMS_KEY, HEROSMS, SERVICE, MAX_PRICE,
-    MONITOR_COUNTRIES as COUNTRIES,
-    BATCH_SIZE,
-    SCRIPT, LOG_DIR, STATE_FILE,
-)
+try:
+    from step_01_config import local_secrets
+except ImportError:
+    local_secrets = None
 
-os.makedirs(LOG_DIR, exist_ok=True)
+
+def _env(key, default=""):
+    if key in os.environ:
+        return os.environ[key]
+    if local_secrets and hasattr(local_secrets, key):
+        return getattr(local_secrets, key)
+    return default
+
+
+def _env_int(key, default):
+    return int(_env(key, str(default)))
+
+
+def _env_float(key, default):
+    return float(_env(key, str(default)))
+
+
+def _required_env(key):
+    value = _env(key, "")
+    if not value:
+        raise RuntimeError(
+            f"Missing required secret: {key} "
+            "(set it in step_01_config/local_secrets.py or environment)"
+        )
+    return value
+
+
+HEROSMS_KEY = _required_env("HEROSMS_KEY")
+HEROSMS = _env("HEROSMS", "https://hero-sms.com/stubs/handler_api.php")
+SERVICE = _env("HEROSMS_SERVICE", "dr")
+MAX_PRICE = _env_float("HEROSMS_MAX_PRICE", 0.03)
+CHECK_INTERVAL = _env_int("MONITOR_CHECK_INTERVAL", 300)
+
+COUNTRIES = [
+    {"id": 151, "name": "Chile", "dial": "56", "iso": "CL"},
+    {"id": 16, "name": "UK", "dial": "44", "iso": "GB"},
+]
 
 
 def log(msg):
-    ts = datetime.utcnow().strftime("%H:%M:%S")
+    ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {"total_success": 0, "total_failed": 0, "total_wasted_numbers": 0}
-
-
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f)
+def api_call(params, timeout=15):
+    query = "&".join(f"{key}={value}" for key, value in params.items())
+    result = subprocess.run(
+        ["curl", "-sS", "--max-time", "10", f"{HEROSMS}?{query}"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return result.stdout.strip()
 
 
 def check_stock_country(country_id):
-    """Check OpenAI SMS stock for a specific country"""
+    """Return (count, physical_count, price) for one country."""
     try:
-        r = subprocess.run(["curl", "-sS", "--max-time", "10",
-            f"{HEROSMS}?api_key={HEROSMS_KEY}&action=getPrices&service={SERVICE}&country={country_id}"],
-            capture_output=True, text=True, timeout=15)
-        data = json.loads(r.stdout)
+        resp = api_call(
+            {
+                "api_key": HEROSMS_KEY,
+                "action": "getPrices",
+                "service": SERVICE,
+                "country": country_id,
+            }
+        )
+        data = json.loads(resp)
         info = data.get(str(country_id), {}).get(SERVICE, {})
-        return int(info.get("count", 0)), int(info.get("physicalCount", 0)), float(info.get("cost", 0))
-    except Exception:
+        return (
+            int(info.get("count", 0)),
+            int(info.get("physicalCount", 0)),
+            float(info.get("cost", 0)),
+        )
+    except Exception as exc:
+        log(f"Failed to check stock for country {country_id}: {exc}")
         return 0, 0, 0
 
 
 def check_stock():
-    """Check all countries, return first with stock: (country_info, count, physical, price)"""
-    for c in COUNTRIES:
-        count, physical, price = check_stock_country(c["id"])
+    """Return first country with available stock within MAX_PRICE."""
+    for country in COUNTRIES:
+        count, physical, price = check_stock_country(country["id"])
+        log(
+            f"{country['name']}: count={count}, "
+            f"physical={physical}, price=${price:.4f}"
+        )
         if count > 0 and price <= MAX_PRICE:
-            return c, count, physical, price
+            return country, count, physical, price
     return None, 0, 0, 0
 
 
-def run_batch(batch_size, country_info=None):
-    """Run a batch of registrations, return (success, failed, wasted_numbers)"""
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    logfile = f"{LOG_DIR}/batch_{ts}.log"
+def run_once():
+    country, count, physical, price = check_stock()
+    if country is None:
+        log("No available phone number")
+        return False
 
-    env = os.environ.copy()
-    env["DISPLAY"] = ":99"
-
-    # Build command with country flags. Proxy mode is disabled for stability.
-    cmd = ["python3", "-u", SCRIPT, str(batch_size)]
-    if country_info:
-        cmd += ["--country", str(country_info["id"]), "--dial", country_info["dial"], "--iso", country_info["iso"]]
-    cmd += ["--no-proxy"]
-
-    country_name = country_info["name"] if country_info else "默认国家"
-    log(f"  正在运行批次：{batch_size} 个（{country_name}）...")
-    r = subprocess.run(
-        cmd,
-        capture_output=True, text=True, env=env, timeout=1800
+    log(
+        f"Stock available: {country['name']} "
+        f"count={count}, physical={physical}, price=${price:.4f}"
     )
-
-    output = r.stdout
-    stderr = r.stderr
-    returncode = r.returncode
-
-    with open(logfile, "w", encoding="utf-8") as f:
-        f.write(output)
-        if stderr:
-            f.write("\n--- STDERR ---\n")
-            f.write(stderr)
-        f.write(f"\n--- EXIT CODE: {returncode} ---\n")
-
-    # Parse results: prefer structured JSON summary from child process
-    success = 0
-    failed = 0
-    summary_parsed = False
-
-    for line in reversed(output.split("\n")):
-        if "__SUMMARY_JSON__" in line:
-            try:
-                payload = line.split("__SUMMARY_JSON__", 1)[1].strip()
-                data = json.loads(payload)
-                success = int(data.get("success", 0))
-                failed = int(data.get("failed", 0))
-                summary_parsed = True
-            except Exception:
-                pass
-            break
-
-    if not summary_parsed:
-        # 兼容旧版英文最终汇总行
-        for line in output.split("\n"):
-            if "FINAL:" in line:
-                import re
-                m = re.search(r"(\d+)\s+\w+,\s+(\d+)\s+failed", line)
-                if m:
-                    success = int(m.group(1))
-                    failed = int(m.group(2))
-
-    # If child crashed, log the details
-    if returncode != 0:
-        log(f"  ⚠ 子进程退出码: {returncode}")
-        if stderr:
-            for line in stderr.strip().split("\n")[-5:]:
-                log(f"    标准错误: {line}")
-
-    # Check for wasted numbers
-    sms_received = output.count("[6] SMS code:")
-    registrations_ok = output.count("✓ Registration successful!")
-    wasted = sms_received - registrations_ok
-
-    log(f"  Result: {success} registered, {failed} failed, {wasted} wasted numbers")
-    log(f"  日志文件: {logfile}")
-
-    return success, failed, wasted
+    return True
 
 
 def main():
-    log("=" * 50)
-    log("自动批量注册 - 短信库存监控")
-    log("=" * 50)
+    parser = argparse.ArgumentParser(description="Monitor HeroSMS phone stock only.")
+    parser.add_argument("--once", action="store_true", help="Query once and exit")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=CHECK_INTERVAL,
+        help=f"Polling interval in seconds, default {CHECK_INTERVAL}",
+    )
+    args = parser.parse_args()
 
-    state = load_state()
-    log(f"状态: 总成功={state['total_success']}，总失败={state['total_failed']}")
-
-    consecutive_no_stock = 0
+    log("=" * 50)
+    log("Phone stock monitor")
+    log("=" * 50)
+    log(f"service={SERVICE}, max_price=${MAX_PRICE}, interval={args.interval}s")
 
     while True:
-        # Check stock across all countries
-        active_country, count, physical, price = check_stock()
-
-        if active_country is None or count == 0:
-            consecutive_no_stock += 1
-            # Adaptive wait: 5min normally, 15min after many checks
-            wait = 300 if consecutive_no_stock < 12 else 900
-            log(f"无库存（第 {consecutive_no_stock} 次检查）。{wait//60} 分钟后再次检查...")
-            time.sleep(wait)
-            continue
-
-        consecutive_no_stock = 0
-        log(f"✓ 发现库存: {active_country['name']} 数量={count}，实体数量={physical}，价格=${price}")
-
-        # Verify by actually trying to buy a number
-        try:
-            r = subprocess.run(["curl", "-sS", "--max-time", "10",
-                f"{HEROSMS}?api_key={HEROSMS_KEY}&action=getNumber&service={SERVICE}&country={active_country['id']}"],
-                capture_output=True, text=True, timeout=15)
-            resp = r.stdout.strip()
-            if "NO_NUMBERS" in resp:
-                log(f"  但 getNumber 返回 NO_NUMBERS，疑似假库存，继续等待...")
-                time.sleep(300)
-                continue
-            elif "ACCESS_NUMBER" in resp:
-                # Got a number! Cancel it immediately (we'll let the batch script buy its own)
-                parts = resp.split(":")
-                act_id = parts[1]
-                subprocess.run(["curl", "-sS", "--max-time", "10",
-                    f"{HEROSMS}?api_key={HEROSMS_KEY}&action=setStatus&id={act_id}&status=8"],
-                    capture_output=True, text=True, timeout=15)
-                log(f"  ✓ 已验证真实库存可用（测试号码已取消）")
-            else:
-                log(f"  收到意外响应: {resp[:80]}，继续等待...")
-                time.sleep(300)
-                continue
-        except Exception as e:
-            log(f"  验证库存出错: {e}，继续等待...")
-            time.sleep(300)
-            continue
-
-        log("  代理: 直连（本地网络）")
-
-        # Run batch
-        batch = min(BATCH_SIZE, count)
-        try:
-            success, failed, wasted = run_batch(batch, active_country)
-        except subprocess.TimeoutExpired:
-            log("  ⚠ 批次超时（30 分钟）。继续运行...")
-            success, failed, wasted = 0, batch, 0
-        except Exception as e:
-            log(f"  ⚠ 批次出错: {e}。继续运行...")
-            success, failed, wasted = 0, batch, 0
-
-        # Update state
-        state["total_success"] += success
-        state["total_failed"] += failed
-        state["total_wasted_numbers"] += wasted
-        save_state(state)
-
-        # Report
-        log(f"  TOTAL: {state['total_success']} success, {state['total_failed']} failed, {state['total_wasted_numbers']} wasted")
-
-        # If wasted numbers detected, STOP and alert
-        if wasted > 0:
-            log("⚠️  检测到号码浪费！停止运行以便检查。")
+        found = run_once()
+        if args.once:
             break
-
-        # If all failed (likely stock ran out mid-batch), wait before retry
-        if success == 0 and failed > 0:
-            log("  本批次全部失败，等待 5 分钟后重试...")
-            time.sleep(300)
-        else:
-            # Brief pause between batches
-            log("  等待 30 秒后运行下一批次...")
-            time.sleep(30)
+        wait = 30 if found else args.interval
+        log(f"Query again in {wait} seconds...")
+        time.sleep(wait)
 
 
 if __name__ == "__main__":

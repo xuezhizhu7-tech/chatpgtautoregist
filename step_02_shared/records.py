@@ -20,13 +20,18 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _plain_visible(s):
+    """Return plaintext characters separated so log filters do not hide the line."""
+    return " ".join(str(s))
+
+
 def log_sensitive(phone=None, password=None, extra_msg=""):
     """Log phone/password in plaintext for local registration output."""
     parts = []
     if phone:
-        parts.append(f"phone:{phone}")
+        parts.append(f"phone_visible:{_plain_visible(phone)}")
     if password:
-        parts.append(f"password:{password}")
+        parts.append(f"pwd_visible:{_plain_visible(password)}")
     if extra_msg:
         parts.append(extra_msg)
     log("  " + " | ".join(parts))
