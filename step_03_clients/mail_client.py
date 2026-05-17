@@ -3,7 +3,7 @@
 Email client: Cloud Mail API + Gmail IMAP fallback.
 Create temp emails and retrieve OTP codes.
 """
-import json, subprocess, time, random, string, imaplib, email, re
+import json, subprocess, time, random, string, imaplib, email, re, os
 from email.utils import parsedate_to_datetime
 from step_01_config.config import CLOUD_MAIL_URL, CLOUD_MAIL_EMAIL, CLOUD_MAIL_PASS, EMAIL_DOMAIN, GMAIL_USER, GMAIL_PASS
 from step_02_shared.records import log
@@ -14,6 +14,10 @@ CLOUD_MAIL_TOKEN = ""  # runtime cache
 def get_cloud_mail_token():
     """获取 cloud-mail API Token"""
     global CLOUD_MAIL_TOKEN
+    env_token = os.environ.get("CLOUD_MAIL_TOKEN", "").strip()
+    if env_token:
+        CLOUD_MAIL_TOKEN = env_token
+        return CLOUD_MAIL_TOKEN
     if CLOUD_MAIL_TOKEN:
         return CLOUD_MAIL_TOKEN
     r = subprocess.run(["curl", "-sS", "--max-time", "10",
@@ -62,7 +66,7 @@ def get_email_otp(target_email, after_ts, timeout=90, jwt=None):
     """Get email OTP via Cloud Mail API (or Gmail IMAP fallback)"""
     deadline = time.time() + timeout
     attempt = 0
-    token = get_cloud_mail_token()
+    token = jwt or get_cloud_mail_token()
     while time.time() < deadline:
         attempt += 1
         if token:

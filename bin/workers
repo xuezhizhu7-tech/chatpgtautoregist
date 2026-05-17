@@ -69,6 +69,47 @@ start_oauth() {
     exit 1
   fi
 
+  if [[ -z "${CLOUD_MAIL_TOKEN:-}" ]]; then
+    echo "Generating shared Cloud Mail token for OAuth workers..."
+    CLOUD_MAIL_TOKEN="$(python3 - <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+repo_dir = os.getcwd()
+if repo_dir not in sys.path:
+    sys.path.insert(0, repo_dir)
+
+from step_01_config.config import CLOUD_MAIL_URL, CLOUD_MAIL_EMAIL, CLOUD_MAIL_PASS
+
+r = subprocess.run(
+    [
+        "curl", "-sS", "--max-time", "10",
+        "-H", "Content-Type: application/json",
+        "-X", "POST",
+        "-d", json.dumps({"email": CLOUD_MAIL_EMAIL, "password": CLOUD_MAIL_PASS}),
+        f"{CLOUD_MAIL_URL}/api/public/genToken",
+    ],
+    capture_output=True,
+    text=True,
+)
+try:
+    data = json.loads(r.stdout)
+    token = data["data"]["token"]
+except Exception as exc:
+    print(f"Failed to generate Cloud Mail token: {exc}; response={r.stdout[:200]}", file=sys.stderr)
+    sys.exit(1)
+
+print(token)
+PY
+)"
+    export CLOUD_MAIL_TOKEN
+  else
+    export CLOUD_MAIL_TOKEN
+    echo "Using existing CLOUD_MAIL_TOKEN for OAuth workers."
+  fi
+
   for worker in $(seq 1 "$workers"); do
     worker_env "$worker"
     local log_file="$repo_dir/$log_dir/oauth_worker_${worker}.log"
