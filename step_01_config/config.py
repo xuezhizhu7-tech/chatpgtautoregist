@@ -59,6 +59,8 @@ DEFAULT_COUNTRY = {
 MONITOR_COUNTRIES = [
     {"id": 151, "name": "Chile", "dial": "56", "iso": "CL"},
     {"id": 16, "name": "UK", "dial": "44", "iso": "GB"},
+    {"id": 4, "name": "Philippines", "dial": "63", "iso": "PH"},
+    {"id": 73, "name": "India", "dial": "73", "iso": "IN"},
 ]
 
 # Fallback countries for buying numbers (register.py)

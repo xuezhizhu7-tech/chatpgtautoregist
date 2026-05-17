@@ -3,7 +3,8 @@
 Monitor HeroSMS stock and query phone numbers only.
 
 This script no longer starts registration batches or buys phone numbers. It
-only checks configured countries and prints available stock.
+only checks configured countries or scans all provider countries and prints
+available stock.
 """
 import argparse
 import json
@@ -58,6 +59,8 @@ CHECK_INTERVAL = _env_int("MONITOR_CHECK_INTERVAL", 300)
 COUNTRIES = [
     {"id": 151, "name": "Chile", "dial": "56", "iso": "CL"},
     {"id": 16, "name": "UK", "dial": "44", "iso": "GB"},
+    {"id": 4, "name": "Philippines", "dial": "63", "iso": "PH"},
+    {"id": 73, "name": "India", "dial": "73", "iso": "IN"},
 ]
 
 
@@ -113,6 +116,72 @@ def check_stock():
     return None, 0, 0, 0
 
 
+def _parse_price_rows(data):
+    """Parse HeroSMS getPrices response into sortable country rows."""
+    rows = []
+    for country_id, country_data in data.items():
+        service_info = country_data.get(SERVICE, {})
+        if not service_info and all(key in country_data for key in ("cost", "count")):
+            service_info = country_data
+
+        try:
+            cost = float(service_info.get("cost", 0))
+            count = int(service_info.get("count", 0))
+            physical = int(service_info.get("physicalCount", 0))
+        except (TypeError, ValueError):
+            continue
+
+        rows.append(
+            {
+                "country_id": str(country_id),
+                "count": count,
+                "physical": physical,
+                "price": cost,
+            }
+        )
+    return rows
+
+
+def scan_all_countries(max_price=None, min_count=0, top=30):
+    """Print cheapest provider countries without needing a local country list."""
+    resp = api_call(
+        {
+            "api_key": HEROSMS_KEY,
+            "action": "getPrices",
+            "service": SERVICE,
+        },
+        timeout=30,
+    )
+    data = json.loads(resp)
+    rows = _parse_price_rows(data)
+
+    filtered = []
+    for row in rows:
+        if row["count"] < min_count:
+            continue
+        if max_price is not None and row["price"] > max_price:
+            continue
+        filtered.append(row)
+
+    filtered.sort(key=lambda item: (item["price"], -item["count"], item["country_id"]))
+
+    if not filtered:
+        log("No countries matched the filter")
+        return []
+
+    log(f"Cheapest countries for service={SERVICE}:")
+    log("country_id  price     count  physical")
+    for row in filtered[:top]:
+        log(
+            f"{row['country_id']:>10}  "
+            f"${row['price']:<8.4f} "
+            f"{row['count']:>5}  "
+            f"{row['physical']:>8}"
+        )
+
+    return filtered
+
+
 def run_once():
     country, count, physical, price = check_stock()
     if country is None:
@@ -130,6 +199,29 @@ def main():
     parser = argparse.ArgumentParser(description="Monitor HeroSMS phone stock only.")
     parser.add_argument("--once", action="store_true", help="Query once and exit")
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan all provider countries and print the cheapest results",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=30,
+        help="How many countries to print when using --all",
+    )
+    parser.add_argument(
+        "--max-price",
+        type=float,
+        default=None,
+        help="Optional max price filter when using --all",
+    )
+    parser.add_argument(
+        "--min-count",
+        type=int,
+        default=0,
+        help="Optional minimum stock count filter when using --all",
+    )
+    parser.add_argument(
         "--interval",
         type=int,
         default=CHECK_INTERVAL,
@@ -141,6 +233,14 @@ def main():
     log("Phone stock monitor")
     log("=" * 50)
     log(f"service={SERVICE}, max_price=${MAX_PRICE}, interval={args.interval}s")
+
+    if args.all:
+        scan_all_countries(
+            max_price=args.max_price,
+            min_count=args.min_count,
+            top=args.top,
+        )
+        return
 
     while True:
         found = run_once()
