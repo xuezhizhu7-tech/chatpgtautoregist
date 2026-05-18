@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .env
 step_01_config/local_secrets.py
+
+# Runtime artifacts
+accounts_worker_*.jsonl
+worker_logs/

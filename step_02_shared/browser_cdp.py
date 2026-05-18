@@ -3,7 +3,19 @@
 CDP browser automation class and Chrome restart with fingerprint.
 """
 import json, asyncio, time, random, subprocess
-from step_01_config.config import CDP_PORT, CHROME_PROFILE_DIR, WINDOW_SIZES, USER_AGENTS, TIMEZONES, LANGUAGES
+from step_01_config.config import (
+    CDP_PORT,
+    CHROME_PROFILE_DIR,
+    BROWSER,
+    BROWSER_PATH,
+    BROWSER_PROCESS_PATTERN,
+    BROWSER_VERSION,
+    BROWSER_MAJOR_VERSION,
+    WINDOW_SIZES,
+    USER_AGENTS,
+    TIMEZONES,
+    LANGUAGES,
+)
 from step_02_shared.records import log
 
 
@@ -144,10 +156,10 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     lines = []
     lines.append("#!/bin/bash")
     lines.append("export DISPLAY=:99")
-    lines.append(f"pkill -f 'chromium.*--remote-debugging-port={CDP_PORT}' 2>/dev/null")
+    lines.append(f"pkill -f '{BROWSER_PROCESS_PATTERN}.*--remote-debugging-port={CDP_PORT}' 2>/dev/null")
     lines.append("sleep 2")
     lines.append(f"rm -rf '{CHROME_PROFILE_DIR}'")
-    chrome = "/snap/bin/chromium"
+    chrome = BROWSER_PATH
     chrome += f" --remote-debugging-port={CDP_PORT}"
     chrome += f" --user-data-dir='{CHROME_PROFILE_DIR}'"
     chrome += " --no-first-run --no-default-browser-check"
@@ -174,7 +186,7 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     r = subprocess.run(["bash", launch_script],
         capture_output=True, text=True, timeout=30)
     ok = "CDP_SUCCESS" in r.stdout
-    log(f"  Chrome worker: port={CDP_PORT}, profile={CHROME_PROFILE_DIR}")
+    log(f"  Chrome worker: browser={BROWSER}, path={BROWSER_PATH}, version={BROWSER_VERSION or 'unknown'}, ua_major={BROWSER_MAJOR_VERSION}, port={CDP_PORT}, profile={CHROME_PROFILE_DIR}")
     proxy_mode = "直连"
     log(f"  Chrome 已重启：{w}x{h}，UA: ...{ua[-30:]}，模式={proxy_mode}，CDP: {'正常' if ok else '失败'}")
     if not ok:

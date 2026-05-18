@@ -107,6 +107,47 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
     async with websockets.connect(page["webSocketDebuggerUrl"], max_size=10**7, open_timeout=10) as ws:
         cdp = CDP(ws)
 
+        async def log_human_check(label):
+            """Log visible human-verification/challenge signals when OpenAI shows them."""
+            info = await cdp.ev("""(function(){
+                var text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
+                var title = document.title || '';
+                var url = location.href || '';
+                var iframes = Array.from(document.querySelectorAll('iframe')).map(function(f){ return f.src || ''; }).filter(Boolean);
+                var inputs = Array.from(document.querySelectorAll('input')).map(function(i){ return (i.name || '') + ' ' + (i.id || '') + ' ' + (i.type || ''); }).join(' ');
+                var combined = (title + ' ' + url + ' ' + text + ' ' + iframes.join(' ') + ' ' + inputs).toLowerCase();
+                var keywords = [
+                    'verify you are human', 'verify that you are human', 'confirm you are human',
+                    'human verification', 'security check', 'checking your browser', 'just a moment',
+                    'challenge', 'captcha', 'turnstile', 'cf-turnstile', 'recaptcha', 'hcaptcha',
+                    'cloudflare', '人机', '真人', '验证你是真人', '安全验证'
+                ];
+                var hits = keywords.filter(function(k){ return combined.indexOf(k) >= 0; });
+                var turnstileCount = document.querySelectorAll('[name="cf-turnstile-response"], .cf-turnstile').length;
+                var captchaFrames = iframes.filter(function(src){ return /turnstile|captcha|recaptcha|hcaptcha|cloudflare/i.test(src); });
+                return JSON.stringify({
+                    detected: hits.length > 0 || turnstileCount > 0 || captchaFrames.length > 0,
+                    title: title,
+                    url: url,
+                    hits: hits,
+                    turnstileCount: turnstileCount,
+                    captchaFrames: captchaFrames.slice(0,3),
+                    text: text.substring(0,180)
+                });
+            })()""")
+            if not info:
+                return False
+            try:
+                data = json.loads(info)
+            except Exception:
+                log(f"  [{label}] 人机验证检测结果解析失败: {str(info)[:160]}")
+                return False
+            if data.get("detected"):
+                log(f"  [{label}] ⚠ 检测到人机验证/安全挑战: title={data.get('title')!r}, hits={data.get('hits')}, turnstile={data.get('turnstileCount')}, frames={data.get('captchaFrames')}")
+                log(f"  [{label}] 人机验证页面文本: {data.get('text')}")
+                return True
+            return False
+
         # Inject fingerprint + clear cookies
         await cdp.inject_fingerprint()
         await cdp.send("Network.clearBrowserCookies")
@@ -117,6 +158,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
         url = await cdp.url()
         log(f"  [O1] 已打开 OAuth 页面: {url}")
+        await log_human_check("O1")
 
         # Click "Continue with phone"
         await cdp.ev("""(function(){
@@ -147,6 +189,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         await asyncio.sleep(6)
         url = await cdp.url()
         log(f"  [O2] 提交手机号后: {url}")
+        await log_human_check("O2")
 
         # Should be on password page
         if "password" not in (url or ""):
@@ -182,6 +225,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
         url = await cdp.url()
         log(f"  [O3] 提交密码后: {url}")
+        await log_human_check("O3")
 
         # If still on password page after first attempt, diagnose and retry
         if "password" in (url or ""):
@@ -206,6 +250,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
             url = await cdp.url()
             log(f"  [O3d] 重试后: {url}")
+            await log_human_check("O3d")
 
             # Still stuck? Log page text snippet for more context
             if "password" in (url or ""):
@@ -222,6 +267,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             await asyncio.sleep(6)
             url = await cdp.url()
             log(f"  [O4b] 提交邮箱后: {url}")
+            await log_human_check("O4b")
 
             if "email-verification" in (url or "") or "verify" in (url or ""):
                 log("  [O5] 正在等待邮箱验证码...")
@@ -236,6 +282,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 await asyncio.sleep(8)
                 url = await cdp.url()
                 log(f"  [O6] 提交邮箱验证码后: {url}")
+                await log_human_check("O6")
 
         # Handle consent page
         if "consent" in (url or ""):
@@ -263,6 +310,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 await asyncio.sleep(5)
             url = await cdp.url()
             log(f"  [O7b] 授权后: {url}")
+            await log_human_check("O7b")
 
         # Check for callback
         if "callback" in (url or "") or "localhost:1455" in (url or "") or "chrome-error" in (url or ""):
@@ -323,6 +371,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
                 return "no_callback_code"
 
         log(f"  ✗ OAuth 失败，最终 URL: {url}")
+        await log_human_check("OFINAL")
         text = await cdp.text(200)
         log(f"  页面文本: {text}")
         return "oauth_failed"
@@ -407,9 +456,10 @@ async def main():
             log(f"  ✗ OAuth failed ({status}). Total: {success} success, {failed} failed")
 
         # Random delay between accounts
-        delay = random.randint(15, 45)
-        log(f"  等待 {delay} 秒后处理下一个账号...")
-        await asyncio.sleep(delay)
+        if i < len(pending):
+            delay = random.randint(15, 45)
+            log(f"  等待 {delay} 秒后处理下一个账号...")
+            await asyncio.sleep(delay)
 
     summary = {"success": success, "failed": failed, "total": len(pending)}
     log(f"\n{'='*60}")

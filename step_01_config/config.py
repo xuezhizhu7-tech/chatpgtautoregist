@@ -3,7 +3,7 @@
 Shared configuration for auto_batch_monitor, register, and oauth_import.
 Secrets can be provided through step_01_config/local_secrets.py or environment variables.
 """
-import os
+import os, re, subprocess
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -101,6 +101,52 @@ GMAIL_PASS = _env("GMAIL_PASS", "")
 CDP_PORT = _env_int("CDP_PORT", 9336)
 CHROME_PROFILE_DIR = _env("CHROME_PROFILE_DIR", f"/tmp/chrome-reg-{CDP_PORT}")
 
+BROWSER_OPTIONS = {
+    "google-chrome-stable": {
+        "path": "/usr/bin/google-chrome-stable",
+        "process_pattern": "(chromium|chrome)",
+    },
+    "chromium-snap": {
+        "path": "/snap/bin/chromium",
+        "process_pattern": "(chromium|chrome)",
+    },
+}
+BROWSER = _env("BROWSER", "google-chrome-stable")
+if BROWSER not in BROWSER_OPTIONS:
+    supported = ", ".join(sorted(BROWSER_OPTIONS))
+    raise RuntimeError(f"Unsupported BROWSER={BROWSER!r}; supported values: {supported}")
+BROWSER_PATH = _env("BROWSER_PATH", BROWSER_OPTIONS[BROWSER]["path"])
+BROWSER_PROCESS_PATTERN = _env("BROWSER_PROCESS_PATTERN", BROWSER_OPTIONS[BROWSER]["process_pattern"])
+
+
+def _detect_browser_version(browser_path):
+    try:
+        r = subprocess.run([browser_path, "--version"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return ""
+    text = (r.stdout or r.stderr or "").strip()
+    m = re.search(r"(\d+\.\d+\.\d+\.\d+)", text)
+    return m.group(1) if m else ""
+
+
+def _chrome_major_version(version):
+    m = re.match(r"(\d+)", version or "")
+    return m.group(1) if m else "125"
+
+
+def _build_user_agents(chrome_major):
+    chrome_version = f"{chrome_major}.0.0.0"
+    return [
+        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36",
+        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36 Edg/{chrome_version}",
+        f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36",
+        f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36",
+    ]
+
+
+BROWSER_VERSION = _env("BROWSER_VERSION", _detect_browser_version(BROWSER_PATH))
+BROWSER_MAJOR_VERSION = _env("BROWSER_MAJOR_VERSION", _chrome_major_version(BROWSER_VERSION))
+
 # ============================================================
 # Account defaults (register.py)
 # ============================================================
@@ -113,13 +159,7 @@ WINDOW_SIZES = [
     (1366, 768), (1440, 900), (1536, 864), (1600, 900),
     (1280, 800), (1920, 1080), (1680, 1050), (1360, 768),
 ]
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-]
+USER_AGENTS = _build_user_agents(BROWSER_MAJOR_VERSION)
 TIMEZONES = ["America/Santiago", "America/New_York", "America/Los_Angeles", "Europe/London"]
 LANGUAGES = ["en-US,en;q=0.9", "en-US,en;q=0.9,es;q=0.8", "en-GB,en;q=0.9"]
 

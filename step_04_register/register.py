@@ -38,12 +38,119 @@ def random_password():
     return DEFAULT_PASSWORD
 
 
+async def log_page_diagnostics(cdp, label, reason):
+    """Log current page state for registration failures that still need diagnostics."""
+    url = await cdp.url()
+    title = await cdp.ev("document.title || ''")
+    body = await cdp.ev("document.body ? document.body.innerText.substring(0,800) : ''") or ""
+    buttons = await cdp.ev("""Array.from(document.querySelectorAll('button, a, [role=button]')).map(function(e){
+        return {
+            tag: e.tagName,
+            text: e.textContent.trim().substring(0, 100),
+            disabled: !!e.disabled,
+            role: e.getAttribute('role') || '',
+            aria: e.getAttribute('aria-label') || ''
+        };
+    }).filter(function(x){ return x.text || x.aria; }).slice(0, 30)""")
+    inputs = await cdp.ev("""Array.from(document.querySelectorAll('input')).map(function(i){
+        return {
+            type: i.type || '',
+            name: i.name || '',
+            id: i.id || '',
+            autocomplete: i.autocomplete || '',
+            placeholder: i.placeholder || '',
+            value_len: (i.value || '').length,
+            disabled: !!i.disabled,
+            visible: !!(i.offsetWidth || i.offsetHeight || i.getClientRects().length)
+        };
+    })""")
+    errors = await cdp.ev("""Array.from(document.querySelectorAll('[role="alert"], .error, [data-testid*="error"], [class*="error"], [aria-live]')).map(function(e){
+        return e.textContent.trim().substring(0, 180);
+    }).filter(Boolean).slice(0, 10)""")
+    log(f"  [{label}] 诊断：{reason}")
+    log(f"  [{label}] URL: {url}")
+    log(f"  [{label}] 标题: {title}")
+    log(f"  [{label}] 页面正文: {body[:500]}")
+    log(f"  [{label}] 可点击元素: {buttons}")
+    log(f"  [{label}] 输入框: {inputs}")
+    log(f"  [{label}] 错误信息: {errors}")
+
+
+async def dismiss_cookie_banner(cdp):
+    """Close cookie banner if present so it cannot interfere with auth button clicks."""
+    result = await cdp.ev("""(function(){
+        var els = Array.from(document.querySelectorAll('button, a, [role=button]'));
+        var btn = els.find(function(e){ return /reject non-essential/i.test(e.textContent || ''); });
+        if(!btn) btn = els.find(function(e){ return /^accept all$/i.test((e.textContent || '').trim()); });
+        if(!btn) btn = els.find(function(e){ return /^close$/i.test((e.getAttribute('aria-label') || '').trim()); });
+        if(btn && !btn.disabled) { btn.click(); return (btn.textContent || btn.getAttribute('aria-label') || '').trim() || 'clicked'; }
+        return null;
+    })()""")
+    if result:
+        log(f"  [cookie] 已关闭 Cookie 弹窗: {result}")
+        await asyncio.sleep(0.5)
+    return result
+
+
+async def ensure_phone_input(cdp):
+    """Verify phone input after clicking Continue with phone."""
+    for attempt in range(1, 7):
+        has_tel = await cdp.ev("!!document.querySelector(\"input[type='tel']\")")
+        if has_tel:
+            if attempt > 1:
+                log(f"  [2p] 手机号输入框已出现（第 {attempt} 次检查）")
+            return True
+
+        state = await cdp.ev("""(function(){
+            var buttons = Array.from(document.querySelectorAll('button, a, [role=button]')).map(function(e){
+                return {text:e.textContent.trim(), disabled:!!e.disabled, tag:e.tagName};
+            }).filter(function(x){ return x.text; });
+            var phone = buttons.find(function(b){ return /phone/i.test(b.text); });
+            var more = buttons.find(function(b){ return /more options/i.test(b.text); });
+            return JSON.stringify({
+                hasPhone: !!phone,
+                hasMore: !!more,
+                phoneDisabled: phone ? !!phone.disabled : null,
+                emailInput: !!document.querySelector('input[type="email"], input[name="email"]')
+            });
+        })()""")
+        try:
+            state_data = json.loads(state or "{}")
+        except Exception:
+            state_data = {}
+
+        if state_data.get("hasPhone"):
+            if attempt > 1:
+                clicked = await cdp.ev("""(function(){
+                    var btns = Array.from(document.querySelectorAll('button, a, [role=button]'));
+                    var p = btns.find(function(b){ return /phone/i.test(b.textContent) && !b.disabled; });
+                    if(p) { p.click(); return true; }
+                    return false;
+                })()""")
+                if clicked:
+                    log("  [2p] 重新点击手机号入口")
+        elif state_data.get("hasMore"):
+            clicked = await cdp.ev("""(function(){
+                var btns = Array.from(document.querySelectorAll('button, a, [role=button]'));
+                var p = btns.find(function(b){ return /more options/i.test(b.textContent) && !b.disabled; });
+                if(p) { p.click(); return true; }
+                return false;
+            })()""")
+            if clicked:
+                log("  [2p] 点击更多选项")
+        elif state_data.get("emailInput"):
+            return False
+        await asyncio.sleep(2)
+
+    return await cdp.ev("!!document.querySelector(\"input[type='tel']\")")
+
+
 async def register_account():
     """Register new account with phone number. Returns dict or None."""
     act_id, phone, country_cfg = buy_number()
     if not act_id:
         log("  ✗ 购买号码失败")
-        return None
+        return {"reg_failed": True, "status": "buy_number_failed", "recorded": True}
 
     password = random_password()
     log_sensitive(phone=f"+{phone}", password=password)
@@ -100,7 +207,10 @@ async def register_account():
                     "status": "site_blocked",
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 })
-                return None
+                return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": "site_blocked", "recorded": True}
+
+        # Close cookie banner before auth interactions; it can overlap or perturb button clicks.
+        await dismiss_cookie_banner(cdp)
 
         # Detect UI type and navigate to phone registration
         has_inline_auth = await cdp.ev("""
@@ -108,28 +218,36 @@ async def register_account():
                 .find(function(e) { return /Continue with Google|More options/i.test(e.textContent); })
         """)
 
+        has_tel = None
         if has_inline_auth:
             log("  [2] 检测到内嵌认证界面")
             phone_clicked = await cdp.ev("""(function(){
                 var btns = Array.from(document.querySelectorAll('button'));
                 var p = btns.find(function(b){ return /phone/i.test(b.textContent); });
-                if(p) { p.click(); return true; }
-                return false;
+                if(p) { p.click(); return p.textContent.trim(); }
+                return null;
             })()""")
+            log(f"  [2] 首次点击手机号入口: {phone_clicked}")
+            if phone_clicked:
+                await asyncio.sleep(2)
             if not phone_clicked:
                 log("    先点击“更多选项”...")
-                await cdp.ev("""(function(){
+                more_clicked = await cdp.ev("""(function(){
                     var btns = Array.from(document.querySelectorAll('button'));
                     var p = btns.find(function(b){ return /more options/i.test(b.textContent); });
-                    if(p) p.click();
+                    if(p) { p.click(); return p.textContent.trim(); }
+                    return null;
                 })()""")
-                await asyncio.sleep(3)
-                await cdp.ev("""(function(){
+                log(f"    更多选项点击结果: {more_clicked}")
+                await asyncio.sleep(2)
+                phone_clicked = await cdp.ev("""(function(){
                     var btns = Array.from(document.querySelectorAll('button'));
                     var p = btns.find(function(b){ return /phone/i.test(b.textContent); });
-                    if(p) p.click();
+                    if(p) { p.click(); return p.textContent.trim(); }
+                    return null;
                 })()""")
-            await asyncio.sleep(4)
+                log(f"    更多选项后点击手机号入口: {phone_clicked}")
+            has_tel = await ensure_phone_input(cdp)
         else:
             log("  [2] 检测到旧版界面，正在点击注册...")
             clicked = await cdp.ev("""(function(){
@@ -169,33 +287,20 @@ async def register_account():
                     await asyncio.sleep(4)
 
         # Verify we have the phone input
-        has_tel = False
-        for check_i in range(8):
-            has_tel = await cdp.ev("!!document.querySelector(\"input[type='tel']\")")
-            if has_tel:
-                break
-            await asyncio.sleep(2)
+        if has_tel is None:
+            has_tel = await ensure_phone_input(cdp)
 
         if not has_tel:
-            log("  [!] 未找到手机号输入框，尝试直接打开手机号注册地址...")
-            await cdp.ev("window.location.href = 'https://auth.openai.com/log-in-or-create-account?usernameKind=phone_number'")
-            await asyncio.sleep(8)
-            await cdp.inject_fingerprint()
-            has_tel = await cdp.ev("!!document.querySelector(\"input[type='tel']\")")
-            if not has_tel:
-                url = await cdp.url()
-                body = await cdp.ev("document.body ? document.body.innerText.substring(0,200) : ''")
-                log(f"  ✗ 无法进入手机号输入页。URL: {url}")
-                log(f"    页面正文: {body[:100]}")
-                cancel_number(act_id, country_cfg.get("bought_at"))
-                save_record({
-                    "phone": f"+{phone}" if phone else None,
-                    "password": password,
-                    "phase": 1,
-                    "status": "no_phone_input",
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                })
-                return None
+            log("  [!] 未找到手机号输入框，记录 no_phone_input 并跳过本次号码。")
+            cancel_number(act_id, country_cfg.get("bought_at"))
+            save_record({
+                "phone": f"+{phone}" if phone else None,
+                "password": password,
+                "phase": 1,
+                "status": "no_phone_input",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            })
+            return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": "no_phone_input", "recorded": True}
 
         url = await cdp.url()
         log(f"  [2] 已准备输入手机号: {url}")
@@ -241,7 +346,7 @@ async def register_account():
                 "status": "unexpected_page",
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
             })
-            return None
+            return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": "unexpected_page", "recorded": True}
 
         # Set password
         await cdp.ev("var el=document.querySelector('input[type=\"password\"]'); if(el){el.focus(); el.click();}")
@@ -375,6 +480,8 @@ async def register_account():
         await asyncio.sleep(8)
         url = await cdp.url()
         log(f"  [7] 提交短信验证码后: {url}")
+        if "contact-verification" in (url or ""):
+            await log_page_diagnostics(cdp, "7e", "短信验证码提交后仍停留在验证页")
 
         # Handle about-you page
         if "about-you" in (url or ""):
@@ -522,20 +629,21 @@ async def main():
 
         if not result:
             failed += 1
-            log(f"  注册失败（未买到号码）。成功: {success}，失败: {failed}")
+            log(f"  注册失败（未知原因，无结果返回）。成功: {success}，失败: {failed}")
             save_record({
                 "phase": 1,
-                "status": "buy_number_failed",
+                "status": "unknown_register_failure",
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
             })
-            log(f"  [日志] 已记录购买号码失败")
-            delay = random.randint(10, 30)
-            log(f"  等待 {delay} 秒后进行下一次尝试...")
-            await asyncio.sleep(delay)
+            log(f"  [日志] 已记录未知注册失败")
+            if i < target_count:
+                delay = random.randint(10, 30)
+                log(f"  等待 {delay} 秒后进行下一次尝试...")
+                await asyncio.sleep(delay)
             continue
 
-        phone = result["phone"]
-        password = result["password"]
+        phone = result.get("phone")
+        password = result.get("password")
 
         if result.get("reg_failed"):
             failed += 1
@@ -543,17 +651,21 @@ async def main():
             if result.get("recorded"):
                 log(f"  [日志] 阶段 1 失败已记录为 {status}。累计: 成功 {success}，失败 {failed}")
             else:
-                save_record({
-                    "phone": f"+{phone}",
-                    "password": password,
+                record = {
                     "phase": 1,
                     "status": status,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                })
+                }
+                if phone:
+                    record["phone"] = f"+{phone}"
+                if password:
+                    record["password"] = password
+                save_record(record)
                 log(f"  [日志] 阶段 1 失败已记录为 {status}。累计: 成功 {success}，失败 {failed}")
-            delay = random.randint(10, 30)
-            log(f"  等待 {delay} 秒后进行下一次尝试...")
-            await asyncio.sleep(delay)
+            if i < target_count:
+                delay = random.randint(10, 30)
+                log(f"  等待 {delay} 秒后进行下一次尝试...")
+                await asyncio.sleep(delay)
             continue
 
         # Registration successful - save record
@@ -568,9 +680,10 @@ async def main():
         log(f"  ✓ Registered! Total: {success} success, {failed} failed")
 
         # Random delay between accounts
-        delay = random.randint(15, 45)
-        log(f"  等待 {delay} 秒后处理下一个账号...")
-        await asyncio.sleep(delay)
+        if i < target_count:
+            delay = random.randint(15, 45)
+            log(f"  等待 {delay} 秒后处理下一个账号...")
+            await asyncio.sleep(delay)
 
     summary = {"success": success, "failed": failed, "total": target_count}
     log(f"\n{'='*60}")
