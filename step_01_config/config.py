@@ -68,7 +68,9 @@ MONITOR_COUNTRIES = [
 FALLBACK_COUNTRIES = [
     (151, "56", "CL", "Chile"),
     (16,  "44", "GB", "UK"),
-    (4,   "63", "PH", "Philippines"),
+    # Temporarily avoid Philippines: recent runs reached password submit but OpenAI returned
+    # "Failed to create account. Please try again" for PH numbers.
+    # (4,   "63", "PH", "Philippines"),
     (73,  "73", "IN", "India"),
 ]
 

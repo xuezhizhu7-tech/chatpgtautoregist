@@ -41,6 +41,14 @@ worker_env() {
   export ACCOUNTS_LOG="$repo_dir/accounts_worker_${worker}.jsonl"
 }
 
+clear_worker_logs() {
+  local pattern="$1"
+  for file in "$log_dir"/$pattern; do
+    [[ -e "$file" ]] || continue
+    : > "$file"
+  done
+}
+
 start_reg() {
   local workers="${1:-}"
   local count="${2:-1}"
@@ -48,6 +56,8 @@ start_reg() {
     usage
     exit 1
   fi
+
+  clear_worker_logs "reg_worker_*.log"
 
   for worker in $(seq 1 "$workers"); do
     worker_env "$worker"
@@ -68,6 +78,8 @@ start_oauth() {
     usage
     exit 1
   fi
+
+  clear_worker_logs "oauth_worker_*.log"
 
   if [[ -z "${CLOUD_MAIL_TOKEN:-}" ]]; then
     echo "Generating shared Cloud Mail token for OAuth workers..."
@@ -131,6 +143,9 @@ show_logs() {
   if ! compgen -G "$log_dir/$pattern" > /dev/null; then
     echo "No logs found for $pattern in $log_dir yet."
     exit 0
+  fi
+  if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
+    clear
   fi
   tail -f "$log_dir"/$pattern
 }

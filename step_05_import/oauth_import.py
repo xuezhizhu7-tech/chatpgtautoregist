@@ -109,7 +109,7 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
 
         async def log_human_check(label):
             """Log visible human-verification/challenge signals when OpenAI shows them."""
-            info = await cdp.ev("""(function(){
+            info = await cdp.ev(r"""(function(){
                 var text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
                 var title = document.title || '';
                 var url = location.href || '';
