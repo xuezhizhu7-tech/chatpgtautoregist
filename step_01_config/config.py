@@ -102,6 +102,7 @@ GMAIL_PASS = _env("GMAIL_PASS", "")
 # ============================================================
 CDP_PORT = _env_int("CDP_PORT", 9336)
 CHROME_PROFILE_DIR = _env("CHROME_PROFILE_DIR", f"/tmp/chrome-reg-{CDP_PORT}")
+REGISTER_PROXY_URL = _env("REGISTER_PROXY_URL", "")
 
 BROWSER_OPTIONS = {
     "google-chrome-stable": {

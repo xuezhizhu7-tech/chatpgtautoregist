@@ -14,7 +14,7 @@ if PROJECT_ROOT not in sys.path:
 from step_02_shared.records import log, log_sensitive, save_record, _enc, _dec
 from step_03_clients.sms_client import buy_number, cancel_number, finish_number, get_sms, apply_country_override
 from step_02_shared.browser_cdp import CDP, restart_chrome_with_fingerprint
-from step_01_config.config import CDP_PORT, DEFAULT_PASSWORD, ACCOUNTS_LOG
+from step_01_config.config import CDP_PORT, DEFAULT_PASSWORD, ACCOUNTS_LOG, REGISTER_PROXY_URL
 
 # Parse CLI args
 _parser = argparse.ArgumentParser(description="Batch register ChatGPT accounts")
@@ -31,7 +31,7 @@ country_cfg = apply_country_override(
     dial=_args.dial,
     iso=_args.iso,
 )
-use_proxy = False
+use_proxy = bool(REGISTER_PROXY_URL.strip())
 
 
 def random_password():

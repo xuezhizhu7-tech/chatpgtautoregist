@@ -2,7 +2,7 @@
 """
 CDP browser automation class and Chrome restart with fingerprint.
 """
-import json, asyncio, time, random, subprocess
+import json, asyncio, time, random, subprocess, shlex
 from step_01_config.config import (
     CDP_PORT,
     CHROME_PROFILE_DIR,
@@ -11,6 +11,7 @@ from step_01_config.config import (
     BROWSER_PROCESS_PATTERN,
     BROWSER_VERSION,
     BROWSER_MAJOR_VERSION,
+    REGISTER_PROXY_URL,
     WINDOW_SIZES,
     USER_AGENTS,
     TIMEZONES,
@@ -147,11 +148,11 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     """Kill Chrome and restart with randomized fingerprint (runs on OC24 locally)
 
     Args:
-        use_proxy: Kept for caller compatibility; proxy mode is disabled.
+        use_proxy: When true, use REGISTER_PROXY_URL for Chrome page traffic.
     """
-    _ = use_proxy
     w, h = random.choice(WINDOW_SIZES)
     ua = random.choice(USER_AGENTS)
+    proxy_url = REGISTER_PROXY_URL.strip() if use_proxy else ""
 
     lines = []
     lines.append("#!/bin/bash")
@@ -171,6 +172,9 @@ def restart_chrome_with_fingerprint(use_proxy=False):
     chrome += " --disable-features=PasswordManager"
     chrome += " --disable-popup-blocking --password-store=basic"
     chrome += f" --user-agent='{ua}'"
+    if proxy_url:
+        chrome += f" --proxy-server={shlex.quote(proxy_url)}"
+        chrome += " --proxy-bypass-list='localhost;127.0.0.1;<-loopback>'"
     chrome += " 'about:blank' > /dev/null 2>" + chr(38) + "1 " + chr(38)
     lines.append(chrome)
     lines.append("CPID=$!")
@@ -187,7 +191,7 @@ def restart_chrome_with_fingerprint(use_proxy=False):
         capture_output=True, text=True, timeout=30)
     ok = "CDP_SUCCESS" in r.stdout
     log(f"  Chrome worker: browser={BROWSER}, path={BROWSER_PATH}, version={BROWSER_VERSION or 'unknown'}, ua_major={BROWSER_MAJOR_VERSION}, port={CDP_PORT}, profile={CHROME_PROFILE_DIR}")
-    proxy_mode = "直连"
+    proxy_mode = "注册代理" if proxy_url else "直连"
     log(f"  Chrome 已重启：{w}x{h}，UA: ...{ua[-30:]}，模式={proxy_mode}，CDP: {'正常' if ok else '失败'}")
     if not ok:
         log(f"  标准输出: {r.stdout[:200]}")
