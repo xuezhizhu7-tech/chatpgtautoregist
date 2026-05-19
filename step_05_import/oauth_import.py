@@ -290,16 +290,16 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             await log_human_check("O4b")
 
             if "email-verification" in (url or "") or "verify" in (url or ""):
-                email_page_info = await cdp.ev(r"""(function(){
+                email_page_js = r"""(function(expected){
                     var text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ');
-                    var expected = arguments[0];
                     var visibleEmails = Array.from(text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)).map(function(m){ return m[0]; });
                     return JSON.stringify({
                         expectedEmail: expected,
                         visibleEmails: visibleEmails.slice(0, 5),
                         emailMatches: visibleEmails.some(function(e){ return e.toLowerCase() === expected.toLowerCase(); })
                     });
-                })(%s)""" % json.dumps(account_email))
+                })(__ACCOUNT_EMAIL__)""".replace("__ACCOUNT_EMAIL__", json.dumps(account_email))
+                email_page_info = await cdp.ev(email_page_js)
                 log(f"  [O5] 验证码页显示邮箱检查: {email_page_info}")
                 log("  [O5] 正在等待邮箱验证码...")
                 otp = await asyncio.to_thread(get_email_otp, account_email, otp_ts, 90, email_jwt)
