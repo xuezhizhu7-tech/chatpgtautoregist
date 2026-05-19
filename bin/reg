@@ -10,4 +10,8 @@ done
 
 repo_dir="$(cd -P "$(dirname "$script_path")/.." && pwd)"
 
+# Local shortcut default: proxy registration Chrome traffic through Mihomo.
+# HeroSMS / Cloud Mail / Sub2API calls remain direct; only the browser uses REGISTER_PROXY_URL.
+export REGISTER_PROXY_URL="${REGISTER_PROXY_URL:-http://127.0.0.1:7892}"
+
 exec bash "$repo_dir/bin/workers" reg 3 1
