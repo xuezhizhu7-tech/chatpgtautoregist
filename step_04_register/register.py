@@ -543,21 +543,28 @@ async def register_account():
             log(f"  [8c] 复选框: 已点击 {checked_count} 个，是否全部选中={all_checked}")
             await asyncio.sleep(0.3)
 
-            # Click "Finish creating account" button
-            btn_clicked = await cdp.ev("""(function(){
-                var btns = Array.from(document.querySelectorAll('button'));
-                var btn = btns.find(function(b){
-                    var t = b.textContent.trim();
-                    return /finish creating account/i.test(t);
-                });
-                if(!btn) btn = document.querySelector('button[type="submit"]');
-                if(btn && !btn.disabled){ btn.click(); return btn.textContent.trim(); }
-                if(btn && btn.disabled) return 'disabled:' + btn.textContent.trim();
-                return null;
-            })()""")
-            log(f"  [8c] 已点击按钮: {btn_clicked}")
-            await asyncio.sleep(10)
-            url = await cdp.url()
+            # Click "Finish creating account" button. The about-you page can accept the
+            # submission but remain visually on the same page for a few seconds, so retry
+            # before classifying it as about_you_failed.
+            for finish_attempt in range(1, 4):
+                btn_clicked = await cdp.ev("""(function(){
+                    var btns = Array.from(document.querySelectorAll('button'));
+                    var btn = btns.find(function(b){
+                        var t = b.textContent.trim();
+                        return /finish creating account/i.test(t);
+                    });
+                    if(!btn) btn = document.querySelector('button[type="submit"]');
+                    if(btn && !btn.disabled){ btn.click(); return btn.textContent.trim(); }
+                    if(btn && btn.disabled) return 'disabled:' + btn.textContent.trim();
+                    return null;
+                })()""")
+                log(f"  [8c] 已点击按钮: {btn_clicked}（第 {finish_attempt}/3 次）")
+                await asyncio.sleep(5 if finish_attempt < 3 else 10)
+                url = await cdp.url()
+                if "about-you" not in (url or ""):
+                    break
+                if finish_attempt < 3:
+                    log(f"  [8c] 资料提交后仍停留在资料页，正在重新点击完成帐户创建（第 {finish_attempt + 1}/3 次）...")
             log(f"  [8] 提交个人信息后: {url}")
 
             # Diagnose: if still on about-you, log page state for debugging
@@ -572,7 +579,7 @@ async def register_account():
                     });
                     return JSON.stringify({inputs:inputs, errors:errors, buttons:buttons});
                 })()""")
-                log(f"  [8e] 仍停留在个人信息页，诊断信息: {diag}")
+                log(f"  [8e] about-you 最终仍未通过，诊断信息: {diag}")
 
         # Check success
         if "chatgpt.com" in (url or "") and "auth" not in (url or ""):

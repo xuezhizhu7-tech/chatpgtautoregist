@@ -185,6 +185,26 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
         await asyncio.sleep(1)
         await cdp.focus_and_type('input[type="tel"]', local_phone)
         await asyncio.sleep(0.5)
+        phone_review = await cdp.ev(r"""(function(){
+            var input = document.querySelector('input[type="tel"]');
+            var hidden = document.querySelector('input[type="hidden"][name="phone"], input[name="phone"]');
+            var submit = document.querySelector('button[type="submit"]') || Array.from(document.querySelectorAll('button')).find(function(b){
+                return /continue|继续/i.test(b.textContent || '');
+            });
+            return JSON.stringify({
+                local_phone: arguments[0],
+                renderedValue: input ? input.value : null,
+                hidden: hidden ? {name:hidden.name || '', id:hidden.id || '', value:hidden.value || ''} : null,
+                submitButton: submit ? {
+                    present: true,
+                    text: (submit.textContent || '').trim().substring(0, 80),
+                    disabled: !!submit.disabled,
+                    ariaDisabled: submit.getAttribute('aria-disabled') || '',
+                    type: submit.type || ''
+                } : {present:false}
+            });
+        })(%s)""" % json.dumps(local_phone))
+        log(f"  [O2] 手机号提交前复查 {phone_review}")
         await cdp.click_submit()
         await asyncio.sleep(6)
         url = await cdp.url()
@@ -270,6 +290,17 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             await log_human_check("O4b")
 
             if "email-verification" in (url or "") or "verify" in (url or ""):
+                email_page_info = await cdp.ev(r"""(function(){
+                    var text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ');
+                    var expected = arguments[0];
+                    var visibleEmails = Array.from(text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)).map(function(m){ return m[0]; });
+                    return JSON.stringify({
+                        expectedEmail: expected,
+                        visibleEmails: visibleEmails.slice(0, 5),
+                        emailMatches: visibleEmails.some(function(e){ return e.toLowerCase() === expected.toLowerCase(); })
+                    });
+                })(%s)""" % json.dumps(account_email))
+                log(f"  [O5] 验证码页显示邮箱检查: {email_page_info}")
                 log("  [O5] 正在等待邮箱验证码...")
                 otp = await asyncio.to_thread(get_email_otp, account_email, otp_ts, 90, email_jwt)
                 if not otp:
@@ -289,26 +320,38 @@ async def oauth_import(phone, password, account_email, token, email_jwt=None):
             log("  [O7] 进入授权页，正在点击允许/继续...")
             btn_texts = await cdp.ev("""Array.from(document.querySelectorAll('button')).map(function(b){ return b.textContent.trim().substring(0,60); })""")
             log(f"  [O7] 找到的按钮: {btn_texts}")
-            clicked = await cdp.ev("""(function(){
-                var btns = Array.from(document.querySelectorAll('button'));
-                var targets = ['allow', 'continue', 'authorize', 'accept', 'agree', 'yes', 'confirm'];
-                for(var i = 0; i < targets.length; i++) {
-                    var btn = btns.find(function(b){ return b.textContent.trim().toLowerCase().includes(targets[i]); });
-                    if(btn && !btn.disabled) { btn.click(); return 'clicked:' + targets[i]; }
-                }
-                for(var j = btns.length - 1; j >= 0; j--) {
-                    if(!btns[j].disabled && btns[j].offsetParent !== null) { btns[j].click(); return 'clicked:last'; }
-                }
-                return 'no_button_found';
-            })()""")
-            log(f"  [O7] 授权点击结果: {clicked}")
-            await asyncio.sleep(3)
-            url_now = await cdp.url()
-            if "consent" in (url_now or ""):
+
+            async def trigger_consent_continue():
+                return await cdp.ev("""(function(){
+                    var forms = Array.from(document.querySelectorAll('form'));
+                    var visibleForms = forms.filter(function(f){ return f.offsetParent !== null || f.getClientRects().length; });
+                    var form = visibleForms[visibleForms.length - 1] || forms[forms.length - 1];
+                    if(form && form.requestSubmit) { form.requestSubmit(); return 'requestSubmit'; }
+                    var btns = Array.from(document.querySelectorAll('button'));
+                    var targets = ['allow', 'continue', 'authorize', 'accept', 'agree', 'yes', 'confirm'];
+                    for(var i = 0; i < targets.length; i++) {
+                        var btn = btns.find(function(b){ return b.textContent.trim().toLowerCase().includes(targets[i]); });
+                        if(btn && !btn.disabled) { btn.click(); return 'clicked:' + targets[i]; }
+                    }
+                    for(var j = btns.length - 1; j >= 0; j--) {
+                        if(!btns[j].disabled && btns[j].offsetParent !== null) { btns[j].click(); return 'clicked:last'; }
+                    }
+                    return 'no_button_found';
+                })()""")
+
+            clicked = "not_attempted"
+            for consent_attempt in range(1, 6):
+                clicked = await trigger_consent_continue()
+                log(f"  [O7] 授权触发结果（第 {consent_attempt}/5 轮）: {clicked}")
+                await asyncio.sleep(3)
+                url = await cdp.url()
+                if "consent" not in (url or ""):
+                    break
+            if "consent" in (url or ""):
                 await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
                 await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
                 await asyncio.sleep(5)
-            url = await cdp.url()
+                url = await cdp.url()
             log(f"  [O7b] 授权后: {url}")
             await log_human_check("O7b")
 
