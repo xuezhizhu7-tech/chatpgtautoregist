@@ -349,23 +349,28 @@ async def register_account():
             return {"phone": phone, "password": password, "act_id": act_id, "reg_failed": True, "status": "unexpected_page", "recorded": True}
 
         # Set password
-        await cdp.ev("var el=document.querySelector('input[type=\"password\"]'); if(el){el.focus(); el.click();}")
-        await asyncio.sleep(0.3)
-        for ch in password:
-            await cdp.send("Input.dispatchKeyEvent", {
-                "type": "keyDown", "text": ch, "key": ch,
-                "code": "", "windowsVirtualKeyCode": ord(ch)
-            })
-            await cdp.send("Input.dispatchKeyEvent", {
-                "type": "keyUp", "key": ch,
-                "code": "", "windowsVirtualKeyCode": ord(ch)
-            })
-            await asyncio.sleep(0.02)
-        await asyncio.sleep(0.5)
-        pwd_len = await cdp.ev("document.querySelector('input[type=\"password\"]')?.value?.length || 0")
+        pwd_len = await cdp.type_password(password)
         log(f"  [5] 已逐字符输入密码，长度={pwd_len}")
         if not pwd_len or pwd_len == 0:
+            pwd_diag = await cdp.ev("""(function(){
+                return {
+                    url: location.href,
+                    title: document.title || '',
+                    active_tag: document.activeElement ? document.activeElement.tagName : '',
+                    active_type: document.activeElement ? (document.activeElement.type || '') : '',
+                    inputs: Array.from(document.querySelectorAll('input')).map(function(i){
+                        return {
+                            type: i.type || '',
+                            name: i.name || '',
+                            autocomplete: i.autocomplete || '',
+                            value_len: (i.value || '').length,
+                            visible: !!(i.offsetWidth || i.offsetHeight || i.getClientRects().length)
+                        };
+                    })
+                };
+            })()""")
             log("  [5] 警告：输入后密码框仍为空！")
+            log(f"  [5] 密码输入诊断: {pwd_diag}")
 
         # Dismiss password popup
         await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
@@ -391,7 +396,25 @@ async def register_account():
                 await asyncio.sleep(8)
                 url = await cdp.url()
                 if "password" in (url or ""):
-                    await cdp.type_password(password)
+                    retry_pwd_len = await cdp.type_password(password)
+                    retry_diag = await cdp.ev("""(function(){
+                        return {
+                            url: location.href,
+                            title: document.title || '',
+                            active_tag: document.activeElement ? document.activeElement.tagName : '',
+                            active_type: document.activeElement ? (document.activeElement.type || '') : '',
+                            inputs: Array.from(document.querySelectorAll('input')).map(function(i){
+                                return {
+                                    type: i.type || '',
+                                    name: i.name || '',
+                                    autocomplete: i.autocomplete || '',
+                                    value_len: (i.value || '').length,
+                                    visible: !!(i.offsetWidth || i.offsetHeight || i.getClientRects().length)
+                                };
+                            })
+                        };
+                    })()""")
+                    log(f"  [5r] 重试后密码长度={retry_pwd_len}, 诊断={retry_diag}")
                     await asyncio.sleep(0.5)
                     await cdp.click_submit()
                     await asyncio.sleep(10)
